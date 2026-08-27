@@ -305,9 +305,9 @@ HAL 版先 `HAL_Init()`，再用 RCC 结构体配置 72MHz。
 
 ### 8.2 HAL GPIO 配置
 
-PC13/PA1/PA2 配输出，PA0 配输入上拉。
+PC13/PA1/PA2 配输出，PA0 配成 `GPIO_MODE_IT_FALLING` 加 `GPIO_PULLUP`。
 
-不过要注意：当前 HAL 版源码只把 PA0 配为 `GPIO_MODE_INPUT`，没有显式配置 `GPIO_MODE_IT_FALLING`。它仍启用了 NVIC，但 HAL EXTI 回调能否触发取决于 EXTI 线是否被正确配置。按当前源码讲，HAL 版这里是需要重点核查的边界。
+`HAL_GPIO_Init()` 会据此在底层完成 AFIO EXTI0 映射、IMR 放行和 FTSR 下降沿选择。这一句结构体配置等价于寄存器版 `exti0_pa0_init()` 里手动写 AFIO/IMR/FTSR 的几步，再配合下面的 NVIC 使能，中断链路即完整。
 
 ### 8.3 HAL NVIC 配置
 
@@ -351,11 +351,11 @@ HAL handler 会检查并清除对应 EXTI 标志，然后调用用户回调。�
 
 这和寄存器版一样，负责在 ISR 唤醒高优先级任务后尽快切换。HAL 不会自动替你做 FreeRTOS 的 yield 判断。
 
-### 8.10 HAL 版 EXTI 配置风险
+### 8.10 HAL 版 EXTI 配置由结构体一步完成
 
-当前 `gpio_init()` 对 PA0 使用 `GPIO_MODE_INPUT`，不是 `GPIO_MODE_IT_FALLING`。
+源码对 PA0 使用 `GPIO_MODE_IT_FALLING` 加 `GPIO_PULLUP`。
 
-按 HAL 常规写法，若要通过 HAL 配置 EXTI，应设置 PA0 为下降沿中断模式。否则只开 NVIC 不等于 EXTI 线已经配置好。README 必须按源码诚实指出这一点：HAL 版中断链路需要重点验证 PA0 EXTI 是否真的被配置。
+`HAL_GPIO_Init()` 会据此把 EXTI0 映射到 PA0、放行中断屏蔽并选择下降沿，相当于寄存器版手写 AFIO/IMR/FTSR。所以 HAL 版只需再用 `HAL_NVIC_SetPriority`/`HAL_NVIC_EnableIRQ` 打开 NVIC，中断链路即完整。
 
 ## 9. 两个版本真正应该怎么学
 
@@ -399,7 +399,7 @@ HAL handler 会检查并清除对应 EXTI 标志，然后调用用户回调。�
 
 ### 10.9 HAL 版只开 NVIC 够不够？
 
-**答**：不够。还必须确保 PA0 配成 EXTI 下降沿并正确清标志。当前源码的 PA0 HAL 配置需要重点核查。
+**答**：单看 NVIC 不够，还必须把 PA0 配成 EXTI 下降沿并正确清标志。本课 HAL 版已用 `GPIO_MODE_IT_FALLING` 完成 EXTI 配置，`HAL_GPIO_EXTI_IRQHandler()` 负责清标志，所以 NVIC 只是最后一步。
 
 ### 10.10 为什么中断里不直接修改复杂业务？
 
@@ -437,7 +437,7 @@ ISR 调普通阻塞 API、NVIC 优先级过高、忘记清 EXTI pending、队列
 
 可以在调试器 Watch 里观察 `g_shared`。如果它增加而 PC13 不翻，说明 RTOS 事件链路基本通，问题偏向 GPIO 输出；如果它不增加，问题偏向 PA0/EXTI/NVIC/队列。
 
-HAL 版需特别确认 PA0 EXTI 是否真的配置成功。若只看到 NVIC 使能但没有 EXTI 触发配置，按键可能没有反应。
+HAL 版的 PA0 已用 `GPIO_MODE_IT_FALLING` 配好 EXTI 触发，配合 NVIC 使能即可响应按键。若无反应，优先查接线、上拉和抖动，而不是怀疑 EXTI 模式没配。
 
 ## 13. 常见问题排查
 
@@ -471,7 +471,7 @@ HAL 版需特别确认 PA0 EXTI 是否真的配置成功。若只看到 NVIC 使
 
 ### 13.8 HAL 版按键无响应
 
-重点查 PA0 是否使用 `GPIO_MODE_IT_FALLING` 或等效 EXTI 配置。当前源码 PA0 是普通输入模式，这是 HAL 版最需要核查的点。
+本课 PA0 已用 `GPIO_MODE_IT_FALLING` 配好 EXTI。若无响应，重点查接线、`GPIO_PULLUP` 是否生效、按键是否真的拉低 PA0，以及 NVIC 优先级是否符合约束。
 
 ### 13.9 队列满导致丢事件
 
@@ -486,11 +486,11 @@ HAL 版需特别确认 PA0 EXTI 是否真的配置成功。若只看到 NVIC 使
 5. 临界区应短，只保护必须保护的共享访问。
 6. NVIC 优先级必须符合 FreeRTOS ISR API 约束。
 7. HAL 回调仍属于中断上下文，不能按普通任务函数处理。
-8. HAL 版必须确认 PA0 真正配置成 EXTI 触发，而不只是普通输入和 NVIC 使能。
+8. HAL 版用 `GPIO_MODE_IT_FALLING` 一步配好 PA0 的 EXTI 触发，`HAL_GPIO_Init()` 在底层完成 AFIO/IMR/FTSR。
 
 ## 15. 建议你现在怎么读这节课
 
-先按第 5 章把链路画出来，尤其标出哪些步骤属于硬件，哪些属于 RTOS。第二遍读寄存器版，从 AFIO、EXTI、NVIC、ISR、队列、任务一路跟到 PC13。第三遍读 HAL 版，重点看 IRQHandler 和 Callback 的关系，并核查 PA0 中断模式。
+先按第 5 章把链路画出来，尤其标出哪些步骤属于硬件，哪些属于 RTOS。第二遍读寄存器版，从 AFIO、EXTI、NVIC、ISR、队列、任务一路跟到 PC13。第三遍读 HAL 版，重点看 IRQHandler 和 Callback 的关系，理解 `GPIO_MODE_IT_FALLING` 如何一步等价于寄存器版的 AFIO/IMR/FTSR。
 
 调试时建议在 `EXTI0_IRQHandler()`、`xQueueSendFromISR()`、`xQueueReceive()` 返回后、`g_shared++` 四个位置打断点。这样能准确定位事件断在哪一层。
 
@@ -500,7 +500,7 @@ HAL 版需特别确认 PA0 EXTI 是否真的配置成功。若只看到 NVIC 使
 2. 记录 `xQueueSendFromISR()` 的返回值，统计队列满导致的丢事件。
 3. 把队列长度从 4 改成 1，观察快速按键时的差异。
 4. 故意把 EXTI0 优先级改成过高，观察 FreeRTOS API 约束带来的问题。
-5. 在 HAL 版把 PA0 改成 `GPIO_MODE_IT_FALLING`，验证回调触发。
+5. 在 HAL 版把 PA0 改成 `GPIO_MODE_IT_RISING`，验证改成上升沿触发后按键时机的变化。
 
 ## 17. 下一课预告
 

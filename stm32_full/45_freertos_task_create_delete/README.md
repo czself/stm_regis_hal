@@ -121,7 +121,7 @@ TCB 保存任务名、优先级、状态、栈顶位置、链表节点等调度�
 
 `pdPASS` 是 FreeRTOS 成功返回宏，属于 FreeRTOS C API 层。
 
-main 里检查 `xTaskCreate(creator_task, ...) != pdPASS`，创建失败就关中断并停住。creator 里创建 worker 时把返回值强转丢弃，这是源码的真实行为；教学上你要知道生产代码也应该检查 worker 创建是否成功。
+main 里检查 `xTaskCreate(creator_task, ...) != pdPASS`，创建失败就关中断并停住。creator 里创建 worker 时也把返回值保存到 `create_ok` 并检查，失败时关中断停住；这和生产代码应检查创建结果的要求一致。
 
 如果不检查返回值，heap 不足时程序可能表面还在跑，但关键任务没有创建，LED 现象就会缺失。
 

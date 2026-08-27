@@ -109,7 +109,7 @@ Stop 是 STM32F1 的深睡眠低功耗模式之一。它比 Sleep 更深：CPU �
 
 `PDDS` 是 Power Down Deepsleep 位。
 
-`PDDS=0` 时，`SLEEPDEEP=1` 加 `WFI` 进入 Stop。本课在 `enter_stop()` 里明确清 `PDDS`，保证代码走当前 Demo 的 Stop 路线。
+`PDDS=0` 时，`SLEEPDEEP=1` 加 `WFI` 进入 Stop。本课在 `enter_stop_mode()` 里明确清 `PDDS`，保证代码走当前 Demo 的 Stop 路线。
 
 ### 6.4 `PWR->CR.CWUF` 是什么
 
@@ -163,7 +163,7 @@ HAL 默认 SysTick 每 1ms 中断一次。如果进入 Stop 前不暂停 tick，
 
 `RCC` 是 Reset and Clock Control，复位和时钟控制模块。
 
-Stop 模式会让 HSE/PLL 等高速时钟停止。唤醒后 CPU 能继续执行，但系统时钟配置不等于自动回到进入 Stop 前的 72MHz。本课主循环在 `enter_stop()` 返回后再次调用 `system_clock_72mhz_init()`，就是把 RCC 状态恢复成课程统一的运行条件。
+Stop 模式会让 HSE/PLL 等高速时钟停止。唤醒后 CPU 能继续执行，但系统时钟配置不等于自动回到进入 Stop 前的 72MHz。本课主循环在 `enter_stop_mode()` 返回后再次调用 `system_clock_72mhz_init()`，就是把 RCC 状态恢复成课程统一的运行条件。
 
 ### 6.13 `FLASH->ACR` 为什么也要跟着时钟恢复讲
 
@@ -225,7 +225,7 @@ PC13 是现象层输出，用来观察唤醒后程序是否继续执行。
 
 `NVIC_EnableIRQ(EXTI0_IRQn)` 打开 CPU 侧响应。EXTI 配好只是外设侧发请求，NVIC 使能后 Cortex-M3 才会进入 `EXTI0_IRQHandler()`。
 
-### 7.7 `enter_stop()` 打开 PWR 时钟
+### 7.7 `enter_stop_mode()` 打开 PWR 时钟
 
 `RCC->APB1ENR |= RCC_APB1ENR_PWREN` 打开 PWR 外设时钟。
 
@@ -251,7 +251,7 @@ ISR 检查 `EXTI->PR.PR0`，写 1 清除挂起位，然后设置 `woken=1`。
 
 ### 7.11 主循环恢复时钟
 
-`enter_stop()` 返回后立刻调用 `system_clock_72mhz_init()`。这是 Stop 课的核心：醒来不等于时钟自动恢复。
+`enter_stop_mode()` 返回后立刻调用 `system_clock_72mhz_init()`。这是 Stop 课的核心：醒来不等于时钟自动恢复。
 
 确认 `woken` 后翻转 PC13 并延时，作为一次唤醒完成的可见反馈。
 
@@ -259,7 +259,7 @@ ISR 检查 `EXTI->PR.PR0`，写 1 清除挂起位，然后设置 `woken=1`。
 
 主循环每次进入 Stop 前先把 `woken` 清零。
 
-这样 `enter_stop()` 返回后，`woken` 只代表这一次等待期间是否经过 EXTI0 ISR。如果不清零，上一轮的唤醒结果会残留，主循环可能误以为本轮也由 PA0 唤醒。
+这样 `enter_stop_mode()` 返回后，`woken` 只代表这一次等待期间是否经过 EXTI0 ISR。如果不清零，上一轮的唤醒结果会残留，主循环可能误以为本轮也由 PA0 唤醒。
 
 ### 7.13 Stop 返回后先恢复时钟再延时
 
@@ -293,7 +293,7 @@ Stop 模式会由芯片低功耗机制处理时钟停止和恢复边界；GPIO �
 
 ### 7.18 如何用调试器验证寄存器版链路
 
-可以在 `enter_stop()` 前观察 `SCB->SCR`，确认 `SLEEPDEEP` 即将置位；在 `EXTI0_IRQHandler()` 里观察 `EXTI->PR`，确认 PR0 被置位并随后写 1 清除；在 `system_clock_72mhz_init()` 返回后观察 `RCC->CFGR.SWS` 是否回到 PLL。
+可以在 `enter_stop_mode()` 前观察 `SCB->SCR`，确认 `SLEEPDEEP` 即将置位；在 `EXTI0_IRQHandler()` 里观察 `EXTI->PR`，确认 PR0 被置位并随后写 1 清除；在 `system_clock_72mhz_init()` 返回后观察 `RCC->CFGR.SWS` 是否回到 PLL。
 
 这三个观察点分别对应“进入深睡眠”“唤醒源触发”“醒后时钟恢复”。
 
@@ -538,7 +538,7 @@ Stop 唤醒后恢复时钟时，也要保证 Flash latency 和总线分频仍符
 
 ## 15. 建议你现在怎么读这节课
 
-先把上一课 Sleep 的 `SLEEPDEEP=0` 和本课 Stop 的 `SLEEPDEEP=1` 对比清楚。再重点读 `enter_stop()`，最后读 HAL 版进入 Stop 前后的 tick 和时钟恢复顺序。
+先把上一课 Sleep 的 `SLEEPDEEP=0` 和本课 Stop 的 `SLEEPDEEP=1` 对比清楚。再重点读 `enter_stop_mode()`，最后读 HAL 版进入 Stop 前后的 tick 和时钟恢复顺序。
 
 ## 16. 扩展练习
 

@@ -805,27 +805,28 @@ HAL 版更接近实际工程写法。它用结构体和 API 减少重复位操�
 ## 10. 检验问题清单
 
 1. **`platformio.ini` 为什么会影响工程能不能跑起来？**
+
    - **答**：它决定平台包、目标板、框架、下载协议和编译宏。写错后，可能在编译、链接、下载或运行阶段出问题。
-
 2. **`board = genericSTM32F103C8` 和 BluePill 是什么关系？**
+
    - **答**：BluePill 是常见开发板名字，`genericSTM32F103C8` 是 PlatformIO 中针对 STM32F103C8 的通用目标配置。本课用它描述芯片资源和链接配置。
-
 3. **为什么寄存器版只包含 `stm32f1xx.h` 就能写 `RCC->CR`？**
+
    - **答**：CMSIS 设备头文件已经把 RCC 的基地址、寄存器结构体和位掩码宏定义好了。`RCC->CR` 本质是访问固定地址上的 RCC 控制寄存器。
-
 4. **为什么 72MHz 前要先配置 `FLASH->ACR`？**
+
    - **答**：CPU 从 Flash 取指，72MHz 下 Flash 需要等待周期。先配置 `LATENCY_2` 可以避免切高速后取指不稳定。
-
 5. **为什么要等待 `HSERDY`、`PLLRDY`、`SWS`？**
+
    - **答**：`HSERDY` 表示 HSE 稳定，`PLLRDY` 表示 PLL 锁定，`SWS` 表示系统时钟源已经切换完成。不等待就可能基于未稳定或未切换的时钟继续运行。
-
 6. **如果下载成功但 LED 不闪，第一步该查工程配置还是 GPIO？**
+
    - **答**：先确认程序是否卡在时钟初始化，例如 HSE 是否可用；再查 PC13 是否真是板载 LED、GPIOC 时钟是否打开、PC13 是否配置成输出、LED 极性是否低电平点亮。
-
 7. **HAL 版的 `RCC_OscInitTypeDef` 和 `RCC_ClkInitTypeDef` 分别对应寄存器版哪部分？**
-   - **答**：`RCC_OscInitTypeDef` 对应 HSE/PLL 这类振荡器配置，主要落到 `RCC->CR` 和 PLL 相关配置；`RCC_ClkInitTypeDef` 对应 SYSCLK/AHB/APB 分频和系统时钟切换，主要落到 `RCC->CFGR`。
 
+   - **答**：`RCC_OscInitTypeDef` 对应 HSE/PLL 这类振荡器配置，主要落到 `RCC->CR` 和 PLL 相关配置；`RCC_ClkInitTypeDef` 对应 SYSCLK/AHB/APB 分频和系统时钟切换，主要落到 `RCC->CFGR`。
 8. **`HAL_Delay()` 卡住最可能和什么有关？**
+
    - **答**：它依赖 HAL Tick。若 `HAL_Init()` 没调用、SysTick 没正常中断、`SysTick_Handler()` 没有让 HAL Tick 递增，就可能一直等不到延时结束。
 
 ## 11. 工程实现步骤
@@ -989,7 +990,7 @@ HAL 版每个 API 都有顺序依赖。比如先 `HAL_GPIO_Init()` 再开 GPIOC 
 ## 16. 扩展练习
 
 1. 把寄存器版延时参数改大或改小，观察闪烁节奏变化。
-2. 注释掉 `RCC_APB2ENR_IOPCEN`，确认下载成功但 LED 不受控。
+2. 注释掉 `RCC_APB2ENR_IOPCEN`，确认下载成功但 LED 不受控。不亮了
 3. 把 HAL 版 `HAL_GPIO_TogglePin()` 改成两次 `HAL_GPIO_WritePin()` 手动亮灭。
 4. 在调试器里观察 `GPIOC->ODR`，确认它随 PC13 状态变化。
 5. 临时把 `HSE_VALUE` 改错，记录哪些现象可能受影响。

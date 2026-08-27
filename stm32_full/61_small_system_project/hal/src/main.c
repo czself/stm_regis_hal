@@ -2,6 +2,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "semphr.h"
 #include <string.h>
 
 /*
@@ -10,6 +11,9 @@
  * HAL 负责把 GPIO/ADC/UART 初始化写成结构体字段。
  * 本课真正要看的是系统数据流：输入任务或中断产生数据，队列传递事件，
  * control_task 统一控制 LED 和日志输出。
+ *
+ * 多个任务都会调用 uart_write_str/uart_write_u16 往串口输出，因此用一把
+ * 互斥锁 g_uart_mutex 保护 UART 发送，避免多任务并发时字节交错。
  */
 
 enum {
@@ -21,6 +25,7 @@ static ADC_HandleTypeDef hadc1;
 static UART_HandleTypeDef huart1;
 static QueueHandle_t g_event_queue;
 static QueueHandle_t g_uart_queue;
+static SemaphoreHandle_t g_uart_mutex;
 static volatile uint16_t g_adc_value;
 static uint8_t g_rx_byte;
 
@@ -38,7 +43,14 @@ static void uart1_init(void);
 
 static void uart_write_str(const char *s)
 {
-    (void)HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), 100U);
+    /*
+     * HAL_UART_Transmit 不是线程安全的；多个任务同时调用时字节可能交错。
+     * 用互斥锁保证一次完整字符串发送不会被其他任务打断。
+     */
+    if (xSemaphoreTake(g_uart_mutex, portMAX_DELAY) == pdTRUE) {
+        (void)HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), 100U);
+        (void)xSemaphoreGive(g_uart_mutex);
+    }
 }
 
 static void uart_write_u16(uint16_t value)
@@ -46,9 +58,14 @@ static void uart_write_u16(uint16_t value)
     char buf[6];
     int i = 0;
 
+    if (xSemaphoreTake(g_uart_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+
     if (value == 0U) {
         uint8_t c = '0';
         (void)HAL_UART_Transmit(&huart1, &c, 1U, 20U);
+        (void)xSemaphoreGive(g_uart_mutex);
         return;
     }
 
@@ -65,6 +82,8 @@ static void uart_write_u16(uint16_t value)
         c = (uint8_t)buf[i];
         (void)HAL_UART_Transmit(&huart1, &c, 1U, 20U);
     }
+
+    (void)xSemaphoreGive(g_uart_mutex);
 }
 
 static void adc_task(void *argument)
@@ -174,6 +193,7 @@ int main(void)
 
     g_event_queue = xQueueCreate(8, sizeof(uint8_t));
     g_uart_queue = xQueueCreate(32, sizeof(uint8_t));
+    g_uart_mutex = xSemaphoreCreateMutex();
 
     BaseType_t adc_ok = xTaskCreate(adc_task, "adc", 160, NULL, 2, NULL);
     BaseType_t key_ok = xTaskCreate(key_task, "key", 128, NULL, 2, NULL);
@@ -183,6 +203,7 @@ int main(void)
 
     if ((g_event_queue == NULL) ||
         (g_uart_queue == NULL) ||
+        (g_uart_mutex == NULL) ||
         (adc_ok != pdPASS) ||
         (key_ok != pdPASS) ||
         (control_ok != pdPASS) ||

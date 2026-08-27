@@ -3,8 +3,24 @@
 /*
  * HAL 版：I2C 读写 MPU6050 寄存器。
  *
- * HAL_I2C_Mem_Write/Read 把“器件地址 + 内部寄存器地址 + 数据”封装起来。
- * 本课要看清楚：MPU6050 的 0x6B、0x75 都是器件内部寄存器地址。
+ * 和寄存器版的区别：寄存器版手动管理 START/STOP/ADDR/TXE/BTF/RXNE 等标志，
+ * HAL 版用 HAL_I2C_Mem_Write/Read 把"器件地址 + 内部寄存器地址 + 数据"封装起来。
+ *
+ * 本课的关键概念：MPU6050 的 0x6B、0x75 都是器件内部寄存器地址，
+ * 不是 I2C 器件地址（0x68/0xD0）。HAL 的 Mem_Write/Mem_Read 同时处理
+ * 器件地址（选中芯片）和寄存器地址（选中芯片内部功能）两层寻址。
+ *
+ * HAL_I2C_Mem_Write 底层做的事（对应寄存器版 mpu_write_register）：
+ *   1. START → 发器件地址 0xD0 → 等 ADDR
+ *   2. 发寄存器地址 0x6B → 等 TXE
+ *   3. 发数据 0x00 → 等 BTF
+ *   4. STOP
+ *
+ * HAL_I2C_Mem_Read 底层做的事（对应寄存器版 mpu_read_register）：
+ *   1. START → 发器件地址 0xD0 → 等 ADDR
+ *   2. 发寄存器地址 0x75 → 等 BTF
+ *   3. 重复起始 → 发器件地址 0xD1 → 等 ADDR
+ *   4. 关 ACK、设 STOP → 等 RXNE → 读 DR
  */
 
 #define MPU_ADDR 0xD0U
@@ -29,7 +45,11 @@ int main(void)
 
     /*
      * PWR_MGMT_1 = 0x6B。
-     * 写 0x00 表示唤醒 MPU6050，否则 WHO_AM_I 之外的数据功能可能仍处于睡眠状态。
+     *
+     * 写 0x00 唤醒 MPU6050。上电后 MPU6050 默认 SLEEP=1（睡眠模式），
+     * 加速度计和陀螺仪不工作以省电。WHO_AM_I 仍可读（I2C 接口独立供电），
+     * 但测量数据寄存器不会更新。不写这一步，后续读到的加速度/陀螺仪数据
+     * 永远是上电默认值，看起来像"通信成功了但数据不变"。
      */
     if (HAL_I2C_Mem_Write(&hi2c1,
                           MPU_ADDR,
@@ -44,7 +64,10 @@ int main(void)
     while (1) {
         /*
          * WHO_AM_I = 0x75。
-         * 正常模块通常返回 0x68，用它做 I2C 通信自检。
+         * 正常返回 0x68。WHO_AM_I 是芯片硬编码身份号，只读，永远不变。
+         * 它不需要任何配置，是最适合做通信自检的寄存器。
+         * 读到 0x68 → 供电/接线/地址/I2C读流程四层都通。
+         * 读不到 → 问题一定在这四层之一。
          */
         if (HAL_I2C_Mem_Read(&hi2c1,
                              MPU_ADDR,

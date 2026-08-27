@@ -80,9 +80,27 @@ TIM2
 
 这节课故意在中断里忙等待，是为了制造肉眼可见的抢占窗口。真实工程中不要这样写。
 
-## 6. 先认识本课里出现的核心名词
+## 6. 核心名词解释
 
-### 6.1 `NVIC` 是什么
+### 6.1 已学名词速查
+
+以下名词在前面课程已完整讲解，本课只用不重复展开：
+
+| 名词 | 一句话提醒 |
+|------|-----------|
+| `system_clock_72mhz_init()` | 配置 HSE+PLL 产生 72MHz，TIM2 定时器时钟为 72MHz（APB1 分频≠1 时定时器加倍） |
+| `PC13 LED` | BluePill 板载 LED，低电平点亮。本课用 LED 的长亮/短脉冲直观显示中断抢占 |
+| `GPIOC->CRH/BSRR/BRR` | PC13 的引脚配置和电平控制 |
+| `GPIOA->CRL` | PA0 的引脚配置寄存器，配成上拉输入 |
+| `AFIO->EXTICR` | AFIO 外部中断映射寄存器，选择 PA0 作为 EXTI0 的来源 |
+| `EXTI->IMR/FTSR/RTSR/PR` | EXTI 中断屏蔽/触发选择/挂起标志，控制 PA0 下降沿触发中断 |
+| `TIM2->PSC/ARR` | 预分频和自动重装载，决定 TIM2 更新周期。本课 PSC=7200-1, ARR=20000-1 → 2s |
+| `TIM2->DIER.UIE` | TIM2 更新中断使能，外设侧第一道门 |
+| `TIM2->SR.UIF` | TIM2 更新中断标志，进入 ISR 后需写 0 清除 |
+| `TIM2->CR1.CEN` | TIM2 计数器使能，启动后计数器开始递增 |
+| `RCC->APB1ENR/APB2ENR` | 外设时钟使能寄存器，TIM2 在 APB1，GPIOA/GPIOC/AFIO 在 APB2 |
+
+### 6.2 `NVIC` 是什么
 
 `NVIC` 是 Nested Vectored Interrupt Controller，嵌套向量中断控制器。
 
@@ -90,7 +108,7 @@ TIM2
 
 没有 NVIC，使能外设中断也不等于 CPU 会响应。
 
-### 6.2 `IRQn` 是什么
+### 6.3 `IRQn` 是什么
 
 `IRQn` 是中断号，用来标识某个中断源。
 
@@ -101,7 +119,7 @@ TIM2
 
 它属于 CMSIS/C 代码层，是软件访问 NVIC 寄存器时使用的编号。
 
-### 6.3 `优先级数字` 是什么
+### 6.4 `优先级数字` 是什么
 
 在 Cortex-M 中，中断优先级数字越小，优先级越高。
 
@@ -112,7 +130,7 @@ TIM2
 
 所以 EXTI0 可以抢占 TIM2。若把两者设成相同优先级，EXTI0 就不能在 TIM2 ISR 正在执行时插入。
 
-### 6.4 `抢占` 是什么
+### 6.5 `抢占` 是什么
 
 抢占表示高优先级中断打断正在执行的低优先级中断。
 
@@ -122,7 +140,7 @@ TIM2
 
 所以本课要观察长亮期间插入短脉冲，必须保证 EXTI0 的抢占优先级高于 TIM2。只把子优先级设得更高，无法产生本课现象。
 
-### 6.5 `EXTI0` 是什么
+### 6.6 `EXTI0` 是什么
 
 EXTI0 是外部中断线 0。
 
@@ -130,7 +148,7 @@ EXTI0 是外部中断线 0。
 
 EXTI 负责检测边沿并向 NVIC 发请求，NVIC 决定 CPU 是否响应。
 
-### 6.6 `AFIO->EXTICR` 是什么
+### 6.7 `AFIO->EXTICR` 是什么
 
 `EXTICR` 是 AFIO 里的外部中断映射寄存器。
 
@@ -138,7 +156,7 @@ EXTI 负责检测边沿并向 NVIC 发请求，NVIC 决定 CPU 是否响应。
 
 如果映射错到 PB0，按 PA0 不会触发 EXTI0。
 
-### 6.7 `EXTI->IMR` 是什么
+### 6.8 `EXTI->IMR` 是什么
 
 `IMR` 是 Interrupt Mask Register，中断屏蔽寄存器。
 
@@ -146,13 +164,13 @@ EXTI 负责检测边沿并向 NVIC 发请求，NVIC 决定 CPU 是否响应。
 
 如果 IMR 没开，即使 PA0 有下降沿，NVIC 也收不到请求。
 
-### 6.8 `EXTI->FTSR / RTSR` 是什么
+### 6.9 `EXTI->FTSR / RTSR` 是什么
 
 `FTSR` 选择下降沿触发，`RTSR` 选择上升沿触发。
 
 本课 PA0 内部上拉，按下接地，所以按下时是高到低，使用下降沿：`FTSR.TR0=1`，`RTSR.TR0=0`。
 
-### 6.9 `EXTI->PR` 是什么
+### 6.10 `EXTI->PR` 是什么
 
 `PR` 是 Pending Register，挂起标志寄存器。
 
@@ -160,13 +178,13 @@ EXTI0 触发后 `PR0=1`。清除方式是写 1 到 `PR0`。这和很多寄存器
 
 不清 PR，退出 ISR 后可能立刻再次进入。
 
-### 6.10 `TIM2->DIER.UIE` 是什么
+### 6.11 `TIM2->DIER.UIE` 是什么
 
 `DIER` 是 DMA/Interrupt Enable Register，`UIE` 是更新中断使能。
 
 `UIE=1` 表示 TIM2 更新事件发生时允许发出中断请求。这是 TIM2 外设侧第一道门。
 
-### 6.11 `TIM2->SR.UIF` 是什么
+### 6.12 `TIM2->SR.UIF` 是什么
 
 `UIF` 是 Update Interrupt Flag，更新事件标志。
 
@@ -174,19 +192,19 @@ TIM2 溢出时 `UIF=1`。本课 ISR 中检查它，然后通过写 0 清除。
 
 如果不清 `UIF`，TIM2 中断会反复进入。
 
-### 6.12 `NVIC_SetPriority()` 是什么
+### 6.13 `NVIC_SetPriority()` 是什么
 
 这是 CMSIS 提供的设置优先级函数。
 
 它最终写 NVIC 的优先级寄存器 `IPR`。STM32F103 实际实现 4 位优先级，有效范围通常为 0 到 15。
 
-### 6.13 `NVIC_EnableIRQ()` 是什么
+### 6.14 `NVIC_EnableIRQ()` 是什么
 
 这是 CMSIS 提供的使能中断函数。
 
 它最终写 NVIC 的 `ISER` 寄存器，打开 NVIC 侧第二道门。外设侧和 NVIC 侧都打开，CPU 才会进入 ISR。
 
-### 6.14 `HAL Callback` 是什么
+### 6.15 `HAL Callback` 是什么
 
 HAL 回调是 HAL 在中断处理流程中调用的用户函数。
 
@@ -201,93 +219,108 @@ HAL 回调是 HAL 在中断处理流程中调用的用户函数。
 
 Callback 的好处是把“硬件清标志”和“用户业务”分开；排查时也要按层次走：先确认硬件是否进 IRQHandler，再确认 HAL Handler 是否清标志，最后确认 Callback 是否执行。
 
-### 6.15 `优先级分组` 是什么
+### 6.16 `优先级分组` 是什么
 
 优先级分组决定 4 位优先级里多少位用于抢占优先级，多少位用于子优先级。抢占优先级决定能不能打断正在执行的中断，子优先级只决定同一抢占级别下谁先响应。
 
 本课 HAL 默认使用 `NVIC_PRIORITYGROUP_4`，可以理解为 4 位都用于抢占优先级，子优先级不起作用。因此 `HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0)` 和 `HAL_NVIC_SetPriority(TIM2_IRQn, 2, 0)` 的关键差异就是抢占优先级。
 
-## 7. 寄存器版代码逐步讲解
+## 7. 寄存器版代码讲解
 
-### 7.1 系统时钟
+### 7.1 已学步骤（快速过）
 
-系统时钟配置到 72MHz。TIM2 挂在 APB1，PCLK1=36MHz，但 APB1 分频不为 1 时，TIM2 实际定时器时钟是 72MHz。
+以下步骤在前 10 课已逐条拆解，本课用列表方式快速过：
 
-### 7.2 PC13 LED
+- `system_clock_72mhz_init()`：72MHz 系统时钟。TIM2 挂在 APB1，因 APB1 分频≠1，定时器实际时钟 = 72MHz（STM32F1 特殊机制）。
+- `led_pc13_init()`：PC13 推挽输出，BRR 拉低亮，BSRR 拉高灭。
+- PA0 上拉输入：CRL 配 CNF0=10（上拉/下拉）+ ODR0=1（上拉），按键按下接 GND，未按下为高。
+- AFIO 映射：`AFIO->EXTICR[0]` 选择 PA0 为 EXTI0 来源。EXTI 输入必须先过 AFIO 才能到达 EXTI 模块，这是 F1 的重要细节。
+- EXTI 配置：`IMR.MR0=1` 开中断屏蔽，`FTSR.TR0=1` 下降沿触发，`RTSR.TR0=0` 上升沿关闭。
+- 清挂起：`EXTI->PR = EXTI_PR_PR0` 写 1 清除，避免使能 NVIC 后立刻进入一次"幽灵中断"。
+- TIM2 定时参数：PSC=7200-1, ARR=20000-1 → 计数频率 10kHz → 约 2 秒溢出一次。`TIM2->DIER.UIE=1` 允许更新事件发中断请求，`TIM2->SR.UIF` 写 0 清除，`TIM2->CR1.CEN=1` 启动计数器。
 
-PC13 配成推挽输出。`BRR` 拉低点亮，`BSRR` 拉高熄灭。本课通过 LED 状态观察中断抢占。
+### 7.2 本课新增步骤概览
 
-### 7.3 PA0 上拉输入
+本课新增的是 NVIC 优先级配置和中断抢占观察：
 
-PA0 配成上拉输入，按键按下接 GND。未按下为高电平，按下为低电平，所以触发边沿是下降沿。
+```text
+EXTI0:
+  → NVIC_SetPriority(EXTI0_IRQn, 0)  // 高优先级
+  → NVIC_EnableIRQ(EXTI0_IRQn)
+  → EXTI0_IRQHandler: 清 PR → 翻转 LED → 忙等待 → 翻转 LED
 
-### 7.4 AFIO 映射 EXTI0
+TIM2:
+  → NVIC_SetPriority(TIM2_IRQn, 2)   // 低优先级
+  → NVIC_EnableIRQ(TIM2_IRQn)
+  → TIM2_IRQHandler: 清 UIF → LED 亮 → 忙等待 → LED 灭
 
-`AFIO->EXTICR[0]` 选择 EXTI0 来自 PA0。GPIO 外部中断要经过 AFIO 映射，这是 F1 的重要细节。
+抢占现象：
+  TIM2 长亮期间按 PA0 → EXTI0 优先级更高 → 抢占执行 → 短脉冲 → 返回 TIM2
+```
 
-### 7.5 EXTI 三个配置
-
-`IMR.MR0=1` 允许中断请求，`FTSR.TR0=1` 选择下降沿，`RTSR.TR0=0` 关闭上升沿。
-
-### 7.6 清 EXTI 挂起标志
-
-初始化时先写 `EXTI->PR = EXTI_PR_PR0`，清掉可能残留的挂起位，避免一使能 NVIC 就进一次旧中断。
-
-### 7.7 设置 EXTI0 NVIC 优先级
+### 7.3 设置 EXTI0 NVIC 优先级
 
 `NVIC_SetPriority(EXTI0_IRQn, 0U)` 设置高优先级，`NVIC_EnableIRQ(EXTI0_IRQn)` 打开 NVIC 侧响应。
 
-### 7.8 TIM2 定时参数
+### 7.4 TIM2 定时参数
 
 `PSC=7200-1`，`ARR=20000-1`。TIM2 计数频率为 10kHz，20000 次溢出一次，所以约 2 秒触发一次更新中断。
 
-### 7.9 TIM2 外设侧中断使能
+### 7.5 TIM2 外设侧中断使能
 
 `TIM2->DIER |= TIM_DIER_UIE` 允许更新事件发中断请求。随后 NVIC 设置 TIM2 优先级为 2 并使能。
 
-### 7.10 启动 TIM2
+### 7.6 启动 TIM2
 
 设置 `TIM2->CR1.CEN` 后计数器开始工作。没有 CEN，PSC/ARR 配好也不会产生更新事件。
 
-### 7.11 `EXTI0_IRQHandler()`
+### 7.7 `EXTI0_IRQHandler()`
 
 ISR 中检查 `EXTI->PR.PR0`，写 1 清除，然后翻转 LED、忙等待、再翻转回来。这个短脉冲用于观察抢占。
 
-### 7.12 `TIM2_IRQHandler()`
+### 7.8 `TIM2_IRQHandler()`
 
 ISR 中检查 `TIM2->SR.UIF`，清除后让 LED 长亮，忙等待，再熄灭。这个长亮窗口用于给 EXTI0 抢占机会。
 
-### 7.13 抢占现象如何发生
+### 7.9 抢占现象如何发生
 
 TIM2 ISR 正在忙等待时，如果 PA0 下降沿触发，EXTI0 请求进入 NVIC。因为优先级 0 高于 2，CPU 保存 TIM2 上下文，先执行 EXTI0 ISR，结束后再回到 TIM2 ISR。
 
-## 8. HAL 版代码逐步讲解
+## 8. HAL 版代码讲解
 
-### 8.1 `HAL_Init()` 与优先级分组
+### 8.1 已学步骤（快速过）
+
+- `HAL_Init()`：初始化 HAL 基础环境（SysTick tick、优先级分组默认 NVIC_PRIORITYGROUP_4）。
+- `system_clock_72mhz_init()`（HAL 版）：`RCC_OscInitTypeDef` + `RCC_ClkInitTypeDef`，结果同寄存器版。
+- `gpio_init()` 中的 PC13 和 PA0：`GPIO_InitTypeDef` 配输出 + `GPIO_MODE_IT_FALLING`。`GPIO_MODE_IT_FALLING` 封装了 AFIO 映射、EXTI IMR/FTSR、PR 清除等近 10 行寄存器操作。
+- `TIM_HandleTypeDef` 和 `HAL_TIM_Base_Init()`：PSC/ARR/CounterMode 等字段写入 TIM2 寄存器。
+- `HAL_TIM_Base_Start_IT()`：同时使能 `DIER.UIE` 和 `CR1.CEN`。
+
+### 8.2 `HAL_Init()` 与优先级分组
 
 `HAL_Init()` 初始化 HAL Tick，并设置默认优先级分组。本课使用抢占优先级比较，子优先级不参与观察。
 
-### 8.2 `GPIO_MODE_IT_FALLING`
+### 8.3 `GPIO_MODE_IT_FALLING`
 
 HAL 配 PA0 为下降沿外部中断模式。它封装 GPIO 输入、AFIO 映射、EXTI IMR、FTSR 和 PR 清除等操作。
 
-### 8.3 `HAL_NVIC_SetPriority()`
+### 8.4 `HAL_NVIC_SetPriority()`
 
 HAL 版用它设置 EXTI0 优先级 0、TIM2 优先级 2。底层仍然写 NVIC 优先级寄存器。
 
-### 8.4 `HAL_NVIC_EnableIRQ()`
+### 8.5 `HAL_NVIC_EnableIRQ()`
 
 打开 NVIC 侧中断响应，对应 CMSIS 的 NVIC 使能动作。
 
-### 8.5 `TIM_HandleTypeDef htim2`
+### 8.6 `TIM_HandleTypeDef htim2`
 
 HAL 用这个句柄描述 TIM2。`Prescaler` 对应 PSC，`Period` 对应 ARR，`Instance=TIM2` 绑定硬件外设。
 
-### 8.6 `HAL_TIM_Base_Init()`
+### 8.7 `HAL_TIM_Base_Init()`
 
 根据 `htim2.Init` 写 TIM2 的 PSC、ARR、计数模式等寄存器。
 
-### 8.7 `HAL_TIM_Base_Start_IT()`
+### 8.8 `HAL_TIM_Base_Start_IT()`
 
 它同时使能 TIM2 更新中断并启动计数器，对应 `DIER.UIE=1` 和 `CR1.CEN=1`。
 
@@ -295,15 +328,15 @@ HAL 用这个句柄描述 TIM2。`Prescaler` 对应 PSC，`Period` 对应 ARR，
 
 如果忘记调用 `HAL_TIM_Base_Start_IT()`，即使 `HAL_TIM_Base_Init()` 和 NVIC 都配置了，TIM2 也不会周期进入回调。初始化结构体只是写 PSC/ARR 等参数，启动中断和启动计数器是另一步。
 
-### 8.8 HAL EXTI 回调链
+### 8.9 HAL EXTI 回调链
 
 `EXTI0_IRQHandler()` 是硬件入口，调用 `HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_0)`。HAL 检查并清除 PR，然后调用 `HAL_GPIO_EXTI_Callback()`。
 
-### 8.9 HAL TIM 回调链
+### 8.10 HAL TIM 回调链
 
 `TIM2_IRQHandler()` 调用 `HAL_TIM_IRQHandler(&htim2)`。HAL 检查并清除 UIF，然后调用 `HAL_TIM_PeriodElapsedCallback()`。
 
-### 8.10 Callback 里为什么不清标志
+### 8.11 Callback 里为什么不清标志
 
 HAL 的 IRQHandler 已经清了对应标志。Callback 只写业务逻辑。重复清标志通常没必要，也容易混淆层次。
 
@@ -311,7 +344,7 @@ HAL 的 IRQHandler 已经清了对应标志。Callback 只写业务逻辑。重�
 
 如果 HAL Callback 反复执行，优先检查 IRQHandler 是否调用了正确的 HAL Handler、触发源是否持续有效，而不是先在 Callback 里乱写清标志代码。
 
-### 8.11 SysTick 优先级
+### 8.12 SysTick 优先级
 
 HAL_Init() 会配置 SysTick 作为 HAL tick，通常优先级较低。本课观察的是 EXTI0 和 TIM2 的抢占关系，SysTick 不应参与现象判断。
 

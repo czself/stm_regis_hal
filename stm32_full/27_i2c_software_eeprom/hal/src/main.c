@@ -15,6 +15,10 @@ static void pc13_led_init(void);
 static void soft_i2c_gpio_init(void);
 static void error_handler(void);
 
+/*
+ * 软件 I2C 速度由此延时决定。120 次空循环在 72MHz 下约 1.6µs。
+ * 系统时钟变化时实际速率随之变化，没有硬件 I2C 的 CCR 精确分频。
+ */
 static void i2c_delay(void)
 {
     for (volatile uint32_t i = 0U; i < 120U; i++) {
@@ -32,6 +36,10 @@ static void sda_write(GPIO_PinState state)
     HAL_GPIO_WritePin(GPIOB, SDA_PIN, state);
 }
 
+/*
+ * START：SCL 高时 SDA 从高→低。
+ * 如果 SDA 下降沿不在 SCL 高电平期间，AT24C02 不识别起始条件。
+ */
 static void i2c_start(void)
 {
     sda_write(GPIO_PIN_SET);
@@ -44,6 +52,10 @@ static void i2c_start(void)
     scl_write(GPIO_PIN_RESET);
 }
 
+/*
+ * STOP：SCL 高时 SDA 从低→高。
+ * 缺少 STOP 时 EEPROM 不启动内部写周期，且总线持续被占用。
+ */
 static void i2c_stop(void)
 {
     sda_write(GPIO_PIN_RESET);
@@ -54,6 +66,10 @@ static void i2c_stop(void)
     i2c_delay();
 }
 
+/*
+ * 写 1 bit。必须先放 SDA 再拉高 SCL，
+ * 否则从机在 SCL 高期间采到的是上一位的电平。
+ */
 static void i2c_write_bit(uint8_t bit_is_one)
 {
     sda_write(bit_is_one ? GPIO_PIN_SET : GPIO_PIN_RESET);
@@ -73,8 +89,10 @@ static void i2c_write_byte(uint8_t byte)
     }
 
     /*
-     * 释放 SDA 并给出第 9 个时钟。
-     * 当前示例不读取 ACK，因此不能仅凭 LED 判断 EEPROM 写入成功。
+     * 第 9 个时钟：I2C 协议要求每字节后接收方应答。
+     * 本代码只释放 SDA + 产生 SCL 脉冲，没有读 SDA 电平，
+     * 所以不知道 AT24C02 是否真的 ACK 了。
+     * LED 翻转只证明主机发出了波形，不证明 EEPROM 写成功。
      */
     sda_write(GPIO_PIN_SET);
     i2c_delay();
@@ -90,8 +108,12 @@ static void soft_i2c_gpio_init(void)
     __HAL_RCC_GPIOB_CLK_ENABLE();
 
     /*
-     * OUTPUT_OD 表示开漏输出。
-     * 写 SET 时释放总线，由上拉电阻拉高；写 RESET 时主动拉低。
+     * GPIO_MODE_OUTPUT_OD = 开漏输出，对应寄存器版 CNF=11。
+     *
+     * 开漏模式下写 GPIO_PIN_SET = 释放（靠上拉拉高），
+     * 写 GPIO_PIN_RESET = 拉低。
+     * 如果误写成 GPIO_MODE_OUTPUT_PP（推挽），
+     * 从机在第 9 个时钟无法拉低 SDA 做 ACK，电气上会冲突。
      */
     gpio.Pin = SCL_PIN | SDA_PIN;
     gpio.Mode = GPIO_MODE_OUTPUT_OD;
@@ -103,6 +125,10 @@ static void soft_i2c_gpio_init(void)
     scl_write(GPIO_PIN_SET);
 }
 
+/*
+ * 主循环：每秒发送一次 I2C 写序列（START → 0xA0 → 0x00 → 0x5A → STOP）。
+ * 边界：没有 ACK 读取和读回校验，LED 翻转不证明 EEPROM 写入成功。
+ */
 int main(void)
 {
     HAL_Init();

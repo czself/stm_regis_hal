@@ -297,7 +297,7 @@ FreeRTOS API 要单独成层理解。`xTaskCreate()`、`vTaskDelay()`、`xQueueC
 
 ### 11.2 硬件核查
 
-确认 PC13 是否可见，PA9/PA10 是否连接到 USB-TTL，PA1/PA2 是否会影响外部电路，ST-Link 下载和复位是否正常。串口课还必须确认共地、115200、8N1。
+确认 PC13 是否可见，PA1/PA2 是否会影响外部电路，ST-Link 下载和复位是否正常。
 
 ### 11.3 寄存器路线
 
@@ -399,7 +399,7 @@ BluePill 板上有电源 LED、稳压器、下载器连接和外部模块，这�
 
 真实低功耗项目还要处理外设关闭、唤醒源选择、时钟恢复和功耗测量夹具。
 
-本课先把 FreeRTOS 进入空闲睡眠的入口讲清楚，后面再把它和 Stop、Standby、RTC、外部中断组合起来才是完整方案。
+本课先把 FreeRTOS 进入空闲睡眠的入口讲清楚。如果你要做一个真正低功耗的产品，需要在 `vApplicationSleep()` 里根据 `expected_idle_time` 决定是否进入 Stop/Standby、关闭哪些外设时钟、选择 RTC 还是 EXTI 做唤醒源，并在唤醒后恢复系统时钟。这已经超出本课范围，属于低功耗工程专题，但本课的 tickless 入口是那条路的起点。
 
 调试时如果想确认这条路径，优先观察 `vApplicationSleep()` 是否进断点，而不是先测板级电流。
 
@@ -472,14 +472,14 @@ heap 不足会让调度器或任务创建失败。
 
 ## 14. 本课最核心的结论
 
-1. tickless idle 是 FreeRTOS 空闲期优化。
-2. 本课睡眠入口只执行 WFI。
-3. WFI 是 Cortex-M 等待中断指令。
+1. tickless idle 是 FreeRTOS 空闲期优化，不是完整的低功耗产品方案。
+2. 本课睡眠入口只执行 WFI，没有进入 Stop/Standby，也没有关闭 PLL 或外设时钟。
+3. WFI 是 Cortex-M 等待中断指令，唤醒后 CPU 继续执行下一条指令。
 4. 本课不是 Stop 或 Standby。
 5. slow_task 的 2 秒阻塞制造空闲窗口。
 6. 本地 FreeRTOSConfig.h 决定 tickless 是否打开。
 7. PC13 只显示任务周期，不直接显示功耗数值。
-8. 真正低功耗产品还要处理时钟、外设和唤醒源。
+8. 真正低功耗产品还要根据 `expected_idle_time` 决策睡眠深度、处理时钟恢复和唤醒源。
 
 ## 15. 建议你现在怎么读这节课
 

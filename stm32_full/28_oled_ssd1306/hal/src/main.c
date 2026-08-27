@@ -87,12 +87,22 @@ static void i2c1_init(void)
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_I2C1_CLK_ENABLE();
 
+    /*
+     * GPIO_MODE_AF_OD = 复用开漏输出，对应寄存器版 CNF=11。
+     * I2C 总线必须用开漏：写 1 时释放引脚靠上拉拉高，写 0 时拉低。
+     * 如果误配成 AF_PP（复用推挽），多个设备同时输出相反电平会短路。
+     */
     gpio.Pin = GPIO_PIN_6 | GPIO_PIN_7;
     gpio.Mode = GPIO_MODE_AF_OD;
     gpio.Pull = GPIO_NOPULL;
     gpio.Speed = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(GPIOB, &gpio);
 
+    /*
+     * ClockSpeed=100000 -> 100kHz 标准模式，对应寄存器版 CCR=180。
+     * 其他字段：7 位地址、不做从机、不允许时钟拉伸。
+     * HAL_I2C_Init() 底层写 CR2/CCR/TRISE/CR1 等寄存器。
+     */
     hi2c1.Instance = I2C1;
     hi2c1.Init.ClockSpeed = 100000;
     hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;

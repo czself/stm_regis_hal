@@ -153,7 +153,7 @@ control 用它控制“挂起 1 秒、恢复 1 秒”的节奏。由于 `configT
 
 `BaseType_t` 是 FreeRTOS 常用基础整数类型，属于 RTOS C 类型层。
 
-main 中 `BaseType_t ok = xTaskCreate(...); ok &= xTaskCreate(...);` 用它汇总两个创建结果。只要结果不是 `pdPASS`，就关中断停住。
+main 中用 `blink_ok` 和 `ctrl_ok` 两个 `BaseType_t` 分别保存两次创建结果，再用 `(blink_ok != pdPASS) || (ctrl_ok != pdPASS)` 判断。只要任一不是 `pdPASS`，就关中断停住。
 
 这段写法能跑，但要知道它依赖 `pdPASS` 的值参与按位与。阅读时重点不是模仿写法，而是理解两个任务创建都必须成功。
 
@@ -229,11 +229,11 @@ malloc failed hook 和 stack overflow hook 都关中断后死循环。
 
 它不需要保存句柄，因为本课没有别的任务控制它。优先级 2 高于 blink，可以让它在 1000ms 到期后及时执行挂起和恢复。
 
-### 7.8 `ok &= xTaskCreate(...)` 怎么理解
+### 7.8 两个创建结果怎么检查
 
-源码用 `ok` 汇总两个任务创建结果。
+源码用 `blink_ok` 和 `ctrl_ok` 分别保存两次创建结果。
 
-如果任一创建失败，`ok != pdPASS`，main 就关中断死循环。阅读时要知道这不是“两个任务都一定创建成功”，而是显式把失败挡在调度器启动前。
+如果任一创建失败，`(blink_ok != pdPASS) || (ctrl_ok != pdPASS)` 成立，main 就关中断死循环。阅读时要知道这不是“两个任务都一定创建成功”，而是显式把失败挡在调度器启动前。
 
 ### 7.9 `blink_task()` 的阻塞节奏
 
@@ -323,7 +323,7 @@ HAL 版 control 任务同样调用 `vTaskSuspend(g_blink)` 和 `vTaskResume(g_bl
 
 ### 8.8 HAL 版创建失败处理
 
-两个任务创建结果同样汇总到 `ok`。失败后关中断死循环。
+两个任务创建结果分别存入 `blink_ok` 和 `ctrl_ok`，任一失败后关中断死循环。
 
 如果 HAL 版 PC13 完全不闪，先查创建结果和 hook，再查 GPIO。不能因为 HAL 初始化写法简洁，就忽略 RTOS 对象创建可能失败。
 

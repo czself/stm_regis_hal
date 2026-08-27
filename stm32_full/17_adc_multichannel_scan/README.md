@@ -2,25 +2,21 @@
 
 ## 1. 本课到底在学什么
 
-本课表面现象是：ADC1 按规则组顺序连续采样 PA0 和 PA1 两个模拟输入，程序把第一次读到的结果放进 `g_adc0`，把第二次读到的结果放进 `g_adc1`。寄存器版中如果 `g_adc0 > g_adc1`，PC13 会翻转；HAL 版每 300ms 翻转一次 PC13，作为程序运行指示。
+本课表面现象：两个电位器分别接 PA0 和 PA1，调试器里 `g_adc0` 跟 PA0 电压走、`g_adc1` 跟 PA1 电压走；当 PA0 电压高于 PA1 时 PC13 翻转。
 
-真正要学的是 ADC 多通道扫描。前面两课只采一个通道，规则组里只有一个成员；本课打开 `SCAN`，把规则组长度设为 2，并在序列中安排第 1 次转换采通道 0、第 2 次转换采通道 1。软件读取 `DR` 的顺序必须和规则组顺序一致。
+真正要学的是 ADC 多通道扫描。前面两课只采一个通道，规则组里只有一个成员；本课打开 `SCAN`，把规则组长度设为 2，第 1 次转换采通道 0（PA0），第 2 次转换采通道 1（PA1）。软件读 `DR` 的顺序必须和规则组顺序一致。
 
-这节课是 ADC DMA 的前置课。多通道扫描时，CPU 如果每个结果都手动轮询和读取，容易忙不过来；下一课之后会逐步让 DMA 自动把 ADC 多通道结果搬到内存数组里。本课先把“扫描顺序”和“结果读取顺序”讲清楚。
+**核心变化：规则组从"1个位置"变成"2个位置"，ADC 按队列依次转换，结果从同一个 DR 依次出来。** 这是 DMA 多通道的前置知识——下一课 DMA 会自动把 DR 依次搬到数组，不用 CPU 手动读。
 
 ## 2. 本课学习目标
 
-学完本课，你应该能做到：
-
-- 解释为什么 PA0、PA1 都要配置为模拟输入。
-- 说明 `ADC_SCAN_ENABLE` 或 `CR1.SCAN` 打开后 ADC 行为有什么变化。
-- 看懂 `SQR1.L = 1` 为什么表示规则组有 2 个转换。
-- 说明 `SQR3` 中 `SQ1=0`、`SQ2=1` 如何决定 PA0/PA1 的采样顺序。
-- 解释为什么第一次读取 `DR` 是通道 0 结果，第二次读取 `DR` 是通道 1 结果。
-- 区分扫描模式、连续转换模式和轮询读取。
-- 看懂 HAL 版 `ADC_REGULAR_RANK_1`、`ADC_REGULAR_RANK_2` 对应规则组序列位置。
-- 说明 rank 配错后变量和真实引脚为什么会对不上。
-- 解释为什么多通道扫描常常要配合 DMA 使用。
+1. `SCAN` 打开后 ADC 行为有什么变化？
+2. `SQR1.L=1` 为什么表示 2 个转换？
+3. `SQ1=0, SQ2=1` 怎么决定 PA0/PA1 的采样顺序？
+4. 第一次读 DR 为什么是通道 0？第二次为什么是通道 1？
+5. rank 配错后变量和引脚为什么对不上？
+6. 连续转换模式（`CONT`）在这里的作用？
+7. 为什么多通道扫描适合配合 DMA？
 
 ## 3. 本课目录结构
 
@@ -35,600 +31,355 @@
     └── src/main.c
 ```
 
-`reg/` 直接配置 ADC1 扫描模式、规则组序列和连续转换，然后轮询两次 `EOC` 读取两个结果。
-
-`hal/` 使用 `ADC_HandleTypeDef` 和两次 `HAL_ADC_ConfigChannel()` 配置 rank 1/rank 2，再用 `HAL_ADC_PollForConversion()` 连续读取两个转换结果。
-
-两份工程都使用 `genericSTM32F103C8`、`stm32cube`、`stlink`，并定义 `HSE_VALUE=8000000U`。
-
 ## 4. 实验硬件
-
-本课使用：
 
 - STM32F103C8T6 BluePill
 - ST-Link 下载器
-- PA0 模拟输入
-- PA1 模拟输入
-- 两个电位器或两个 0 到 3.3V 模拟电压源
+- **两个电位器**（推荐 10kΩ），接法：
+  - 电位器 1：中间脚 → PA0，两端 → 3.3V/GND
+  - 电位器 2：中间脚 → PA1，两端 → 3.3V/GND
 - PC13 板载 LED
 
-推荐接法：
-
-```text
-电位器 1 中间脚 -> PA0
-电位器 2 中间脚 -> PA1
-两个电位器两端 -> 3.3V 和 GND
-```
-
-PA0/PA1 输入电压都不能超过 3.3V。外部模拟源必须和 STM32 共地。
+**PA0/PA1 输入都不能超过 3.3V。外部模拟源必须共地。**
 
 ## 5. 先建立一个最基本的脑图
 
-本课按六层拆开看。
+```text
+1. 系统时钟 72MHz
+2. PC13 推挽输出
+3. PA0/PA1 都配成模拟输入
+4. ADC1 时钟 PCLK2/6 = 12MHz
+5. ★ CR1.SCAN = 1（扫描模式）
+6. ★ CR2.CONT = 1（连续转换）
+7. ★ SQR1.L = 1（2 个转换）
+8. ★ SQR3: SQ1=0(先采PA0), SQ2=1(再采PA1)
+9. SMPR2: CH0/CH1 采样时间
+10. 校准 → SWSTART 启动
+11. 第一次等 EOC → 读 DR → g_adc0（PA0 结果）
+12. 第二次等 EOC → 读 DR → g_adc1（PA1 结果）
+13. CONT=1 → ADC 自动开始下一轮扫描
+```
 
-现象层：调试器里 `g_adc0` 对应规则组第 1 次转换结果，正常接线下是 PA0 电压；`g_adc1` 对应第 2 次转换结果，正常接线下是 PA1 电压。
-
-物理/硬件层：PA0 和 PA1 分别接两个模拟电压源，都要配置成模拟输入。ADC1 一次只能输出一个转换结果到 `DR`，所以两个通道结果要按顺序读取。
-
-芯片模块层：GPIOA 负责 PA0/PA1 模拟输入，ADC1 负责扫描转换，RCC 提供 ADC 时钟，GPIOC 控制 PC13，HAL 版 SysTick 支撑 `HAL_Delay()`。
-
-寄存器/bit 层：`CR1.SCAN` 打开扫描模式，`CR2.CONT` 打开连续转换，`SQR1.L` 设置规则组长度，`SQR3.SQ1/SQ2` 设置通道顺序，`SMPR2.SMP0/SMP1` 设置采样时间，`SR.EOC` 表示每个转换完成，`DR` 依次输出每个转换结果。
-
-C/CMSIS 层：寄存器版连续两次等待 `EOC`，第一次读 `DR` 放入 `g_adc0`，第二次读 `DR` 放入 `g_adc1`。
-
-HAL/工程层：HAL 版用 `NbrOfConversion = 2` 和两次 `HAL_ADC_ConfigChannel()` 配 rank；再用两次 Poll/GetValue 读取两个 rank 的结果。
-
-完整链路是：
-
-1. 系统时钟配置到 72MHz。
-2. PC13 配成输出。
-3. PA0、PA1 配成模拟输入。
-4. ADC1 时钟打开。
-5. 寄存器版设置 ADC 时钟为 PCLK2/6。
-6. 打开 ADC 扫描模式。
-7. 打开连续转换模式。
-8. 设置规则组长度为 2。
-9. 规则组第 1 项设置为通道 0，也就是 PA0。
-10. 规则组第 2 项设置为通道 1，也就是 PA1。
-11. 设置通道 0/1 采样时间。
-12. ADC 校准后启动转换。
-13. 第一次 `EOC` 后读取 `DR`，得到通道 0 结果。
-14. 第二次 `EOC` 后读取 `DR`，得到通道 1 结果。
-15. ADC 因连续转换模式继续下一轮扫描。
+第 5~8 步是本课新增。第 11~12 步是"读 DR 顺序必须和规则组顺序一致"的关键。
 
 ## 6. 核心名词解释
 
-### 6.1 多通道扫描是什么
+### 6.1 已学名词速查
 
-多通道扫描是 ADC 按规则组序列依次转换多个通道。
+以下名词在第 15~16 课已详细讲过，本课不再重复：
 
-它属于 ADC 转换调度层。单通道时每次只采一个输入；扫描模式下，ADC 会按 `SQR` 里配置的顺序依次采多个输入。
+| 名词 | 一句话提醒 |
+|------|-----------|
+| `ADC1_IN0 / PA0` | PA0 第二功能是 ADC1 通道 0，配模拟输入 |
+| `ADC1_IN1 / PA1` | PA1 第二功能是 ADC1 通道 1，配模拟输入 |
+| `ADCPRE = PCLK2/6` | 12MHz，不能超 14MHz |
+| `ADON / RSTCAL / CAL` | 上电 → 复位校准 → 执行校准 |
+| `EXTTRIG / SWSTART` | 允许触发 + 软件启动转换 |
+| `EOC` | 转换完成标志，每完成一个通道置位一次 |
+| `DR` | 数据寄存器，12 位结果，读 DR 清 EOC |
+| `SMPR2` | 通道 0~9 采样时间寄存器 |
+| `SQR1.L` | 规则组长度，写"转换数-1" |
+| `SQR3.SQ1` | 规则组第 1 个转换通道号 |
+| `GPIO_MODE_ANALOG` | HAL 模拟输入模式 |
+| `HAL_ADC_Start()` | 启动 ADC 转换 |
+| `HAL_ADC_PollForConversion()` | 等待 EOC |
+| `HAL_ADC_GetValue()` | 读 DR |
 
-本课扫描 PA0 和 PA1 两个通道。写错序列时，变量和实际引脚会对不上。
+本课新增重点在下面。
 
-### 6.2 `PA0 / ADC1_IN0` 是什么
+### 6.2 `SCAN`（扫描模式）是什么
 
-PA0 是 GPIOA 的 0 号引脚，ADC1_IN0 是 ADC1 的通道 0。
+位于 `ADC1->CR1`。单通道时 ADC 只转 SQ1 那一个通道就停；`SCAN=1` 后 ADC 按 SQ1→SQ2→...→SQ(L+1) 依次转换所有位置，每个位置完成都会置一次 `EOC`。
 
-它属于物理引脚层和 ADC 通道层。本课把 PA0 作为第 1 个扫描通道，结果保存到 `g_adc0`。
+不开 `SCAN`，ADC 不会按多个 rank 扫描，第二个通道读数不可靠。
 
-如果电位器接在 PA0，但 rank 配到通道 1，读数就会跑到另一个变量。
+### 6.3 `CONT`（连续转换模式）是什么
 
-### 6.3 `PA1 / ADC1_IN1` 是什么
+位于 `ADC1->CR2`。`CONT=1` 时，一轮规则组扫描完成后 ADC 自动开始下一轮，不需要软件重新启动。
 
-PA1 是 GPIOA 的 1 号引脚，ADC1_IN1 是 ADC1 的通道 1。
+本课用 `CONT=1` + `SCAN=1`，效果是 ADC 持续循环"采 PA0 → 采 PA1 → 采 PA0 → ..."。
 
-它属于物理引脚层和 ADC 通道层。本课把 PA1 作为第 2 个扫描通道，结果保存到 `g_adc1`。
+如果 `CONT=0`，一轮扫描完就停，需要软件再写 `SWSTART`。
 
-PA1 和 PA0 都必须是模拟输入。
+### 6.4 `SQR3.SQ2` 是什么
 
-### 6.4 `SCAN` 是什么
+规则组第 2 个转换位置。本课 `SQ2=1` 表示第 2 次采通道 1（PA1）。
 
-`SCAN` 是 ADC Scan Conversion Mode，中文叫扫描转换模式。
+`SQ1` 和 `SQ2` 一起决定了扫描顺序：先 PA0 再 PA1。配反了变量就和引脚对不上。
 
-它属于 ADC 控制模式层。寄存器版设置 `ADC1->CR1 = ADC_CR1_SCAN`，HAL 版设置 `hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE`。
+### 6.5 `Rank` 是什么
 
-如果不打开扫描模式，ADC 不会按多个 rank 连续转换，第二个通道读数就不符合预期。
+HAL 对规则组序列位置的称呼。`ADC_REGULAR_RANK_1` = 第 1 个转换位置（对应 SQ1），`ADC_REGULAR_RANK_2` = 第 2 个转换位置（对应 SQ2）。
 
-### 6.5 连续转换模式是什么
+HAL 版用两次 `HAL_ADC_ConfigChannel()` 分别配 rank 1 和 rank 2。rank 配错时，变量读到的通道顺序会错。
 
-连续转换模式表示 ADC 完成一轮转换后自动开始下一轮。
+### 6.6 `NbrOfConversion` 是什么
 
-它属于 ADC 运行模式层。寄存器版 `ADC_CR2_CONT`，HAL 版 `ContinuousConvMode = ENABLE`。
+HAL 的规则组转换数量字段。本课设为 2，对应寄存器版 `SQR1.L=1`（2-1=1）。
 
-本课使用连续转换，所以启动一次后 ADC 会不断扫描 PA0/PA1。
+如果仍是 1，HAL 只按一个 rank 扫描，第二个通道不会采。
 
-如果关闭连续转换，就需要软件每轮重新启动。
+### 6.7 多通道扫描时 DR 怎么工作
 
-### 6.6 `SQR1.L` 是什么
+ADC 只有一个 `DR`。扫描模式下，每完成一个通道转换，结果就放入 `DR` 并置 `EOC`。软件必须在下一个通道转换完成前读走 `DR`，否则会被覆盖。
 
-`SQR1.L` 是规则组序列长度字段。
-
-它属于 ADC 规则组长度配置层。`L` 写的是转换数量减 1。
-
-本课寄存器版：
-
-```c
-ADC1->SQR1 = ADC_SQR1_L_0;
-```
-
-`L=1` 表示规则组有 2 个转换。不是 1 个转换。
-
-### 6.7 `SQR3.SQ1/SQ2` 是什么
-
-`SQ1` 和 `SQ2` 是规则组第 1、第 2 个转换位置。
-
-它们属于 ADC 规则组通道顺序层。本课：
-
-```c
-ADC1->SQR3 = (0U << 0) | (1U << 5);
-```
-
-`SQ1=0` 表示第 1 次转换通道 0，`SQ2=1` 表示第 2 次转换通道 1。
-
-### 6.8 `Rank` 是什么
-
-Rank 是 HAL 对规则组序列位置的称呼。
-
-它属于 HAL 规则组配置层。`ADC_REGULAR_RANK_1` 对应第 1 个转换位置，`ADC_REGULAR_RANK_2` 对应第 2 个转换位置。
-
-HAL 版用两次 `HAL_ADC_ConfigChannel()` 配 rank 1 和 rank 2。
-
-Rank 配错时，变量读到的通道顺序会错。
-
-### 6.9 `SMPR2` 是什么
-
-`SMPR2` 是 ADC 采样时间寄存器 2。
-
-它属于 ADC 采样时间层。通道 0 和 1 都在 `SMPR2` 中配置。
-
-寄存器版把 `SMP0` 和 `SMP1` 都置成最长采样时间。HAL 版使用 `ADC_SAMPLETIME_55CYCLES_5`。
-
-这也是两份代码的一个差异：采样时间不完全相同。
-
-### 6.10 `EOC` 是什么
-
-`EOC` 是 End Of Conversion，中文叫转换完成标志。
-
-它属于 ADC 状态层。多通道扫描中，每完成一个通道转换，软件就可以读取一次 `DR`。
-
-本课寄存器版和 HAL 版都按“等待一次 EOC，读取一次结果”的方式读取两个通道。
-
-### 6.11 `DR` 是什么
-
-`DR` 是 Data Register，中文叫数据寄存器。
-
-它属于 ADC 结果输出层。ADC 每次转换完成后，当前通道结果放入 `DR`。
-
-多通道扫描时，`DR` 不是同时保存两个结果，而是按转换完成顺序依次给出结果。
-
-如果读取不及时，后续转换可能覆盖旧结果。
-
-### 6.12 `g_adc0/g_adc1` 是什么
-
-`g_adc0` 和 `g_adc1` 是保存两个通道结果的全局变量。
-
-它们属于 C 代码数据层。寄存器版和 HAL 版都把第一次读取结果放入 `g_adc0`，第二次读取结果放入 `g_adc1`。
-
-它们声明为 `volatile`，方便调试观察，并避免编译器过度优化。
-
-### 6.13 `HAL_ADC_ConfigChannel()` 是什么
-
-这是 HAL 配置 ADC 规则组通道的接口。
-
-它属于 HAL 通道配置层。每次调用根据 `Channel`、`Rank`、`SamplingTime` 写入底层 `SQR` 和 `SMPR`。
-
-本课 HAL 版调用两次：第一次配置通道 0 为 rank 1，第二次配置通道 1 为 rank 2。
-
-### 6.14 `NbrOfConversion` 是什么
-
-`NbrOfConversion` 是 HAL ADC 规则组转换数量字段。
-
-它属于 HAL 规则组长度层。本课设置为 2，对应寄存器版 `SQR1.L=1`。
-
-如果它仍是 1，HAL 版不会按两个 rank 完整扫描。
-
-### 6.15 ADC 时钟分频是什么
-
-ADC 时钟分频控制 PCLK2 到 ADC 的频率。
-
-它属于 RCC/ADC 时钟层。寄存器版显式设置 `RCC_CFGR_ADCPRE_DIV6`。HAL 版当前代码没有显式调用 `__HAL_RCC_ADC_CONFIG()`，这点要如实注意。
-
-实际工程中应确认 ADC 时钟不超过 F103 规格限制。
+这就是为什么多通道扫描适合 DMA——DMA 能自动把每个 DR 值搬到数组对应位置，不会漏。
 
 ## 7. 寄存器版代码逐步讲解
 
-### 7.1 系统时钟和 PC13
+### 7.1 已学步骤（快速过）
 
-系统时钟配置到 72MHz，PC13 配成输出。
+1. `system_clock_72mhz_init()` — HSE 8MHz → PLL x9 → 72MHz
+2. `pc13_led_init()` — PC13 推挽输出，初始高电平灭
+3. 开 GPIOA + ADC1 时钟
+4. PA0/PA1 模拟输入（清 MODE0/CNF0/MODE1/CNF1）
+5. ADC 时钟 PCLK2/6 = 12MHz
+6. 校准（RSTCAL → CAL）
 
-PC13 在本课只是指示程序运行或比较结果，不参与 ADC 扫描本身。
-
-### 7.2 全局变量
-
-代码：
-
-```c
-static volatile uint16_t g_adc0, g_adc1;
-```
-
-`g_adc0` 保存规则组第 1 个结果，`g_adc1` 保存第 2 个结果。
-
-### 7.3 打开 GPIOA 和 ADC1 时钟
-
-代码：
+### 7.2 新增：打开扫描和连续转换
 
 ```c
-RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_ADC1EN;
-```
-
-PA0/PA1 属于 GPIOA，ADC1 是 APB2 外设。两个时钟都必须打开。
-
-### 7.4 PA0/PA1 配成模拟输入
-
-代码：
-
-```c
-GPIOA->CRL &= ~(GPIO_CRL_MODE0 | GPIO_CRL_CNF0 | GPIO_CRL_MODE1 | GPIO_CRL_CNF1);
-```
-
-清掉 PA0/PA1 的 MODE/CNF 后，它们成为模拟输入。
-
-### 7.5 配置 ADC 时钟和扫描/连续模式
-
-代码：
-
-```c
-RCC->CFGR |= RCC_CFGR_ADCPRE_DIV6;
 ADC1->CR1 = ADC_CR1_SCAN;
 ADC1->CR2 = ADC_CR2_ADON | ADC_CR2_CONT;
+ADC1->CR2 |= ADC_CR2_EXTTRIG;
 ```
 
-`ADCPRE_DIV6` 设置 ADC 时钟分频。`SCAN` 打开扫描模式。`CONT` 打开连续转换。`ADON` 给 ADC 上电。
+`SCAN=1` 让 ADC 按规则组序列依次转换多个通道。`CONT=1` 让一轮完成后自动开始下一轮。`EXTTRIG` 允许软件触发。
 
-### 7.6 配置采样时间
-
-代码：
+### 7.3 新增：配置采样时间
 
 ```c
 ADC1->SMPR2 = ADC_SMPR2_SMP0 | ADC_SMPR2_SMP1;
 ```
 
-通道 0 和 1 都设置为最长采样时间，适合电位器这类输入。
+通道 0 和 1 都设最长采样时间（239.5 cycles），适合电位器。
 
-### 7.7 配置规则组长度和顺序
-
-代码：
+### 7.4 新增：规则组长度和顺序
 
 ```c
-ADC1->SQR1 = ADC_SQR1_L_0;
-ADC1->SQR3 = (0U << 0) | (1U << 5);
+ADC1->SQR1 = ADC_SQR1_L_0;                    /* L=1 → 2个转换 */
+ADC1->SQR3 = (0U << 0) | (1U << 5);           /* SQ1=0, SQ2=1 */
 ```
 
-`L=1` 表示两个转换。`SQ1=0` 表示先采 PA0，`SQ2=1` 表示再采 PA1。
+`L=1` 表示 2 个转换（写的是转换数减 1）。`SQ1=0` 先采 PA0，`SQ2=1` 再采 PA1。
 
-### 7.8 校准并启动扫描
-
-代码执行 `RSTCAL`、`CAL`，等待硬件完成后：
+### 7.5 启动扫描
 
 ```c
 ADC1->CR2 |= ADC_CR2_SWSTART;
 ```
 
-这启动扫描。由于 `CONT=1`，ADC 会持续循环扫描两个通道。
+因为 `CONT=1`，启动一次后 ADC 会持续循环扫描。
 
-### 7.9 第一次 EOC 读取 `g_adc0`
-
-主循环：
+### 7.6 主循环：两次 EOC 两次 DR
 
 ```c
-while((ADC1->SR & ADC_SR_EOC)==0U){}
-g_adc0=ADC1->DR;
-```
+g_adc0 = adc_wait_and_read();    /* 第1次EOC → DR → PA0结果 */
+g_adc1 = adc_wait_and_read();    /* 第2次EOC → DR → PA1结果 */
 
-第一次等待到的是规则组第 1 个转换结果，也就是通道 0。
-
-### 7.10 第二次 EOC 读取 `g_adc1`
-
-接着：
-
-```c
-while((ADC1->SR & ADC_SR_EOC)==0U){}
-g_adc1=ADC1->DR;
-```
-
-第二次等待到的是规则组第 2 个转换结果，也就是通道 1。
-
-### 7.11 比较两个通道并翻转 PC13
-
-代码：
-
-```c
-if(g_adc0>g_adc1) pc13_toggle();
+if (g_adc0 > g_adc1) {
+    pc13_toggle();
+}
 delay_cycles(720000U);
 ```
 
-当 PA0 电压对应值大于 PA1 时，PC13 翻转。延时让现象不至于太快。
+读取顺序必须和规则组顺序一致。第一次读到的 DR 是 SQ1（通道 0/PA0），第二次是 SQ2（通道 1/PA1）。
 
 ## 8. HAL 版代码逐步讲解
 
-### 8.1 HAL 初始化和系统时钟
+### 8.1 已学步骤（快速过）
 
-HAL 版先 `HAL_Init()`，再配置系统时钟到 72MHz。
+1. `HAL_Init()` + 时钟 72MHz
+2. PC13 `GPIO_MODE_OUTPUT_PP`
+3. PA0/PA1 `GPIO_MODE_ANALOG`
+4. `__HAL_RCC_ADC1_CLK_ENABLE` + `RCC_ADCPCLK2_DIV6`
+5. `HAL_ADCEx_Calibration_Start()`
+6. `HAL_ADC_Start()`
 
-`SysTick_Handler()` 调用 `HAL_IncTick()`，为 `HAL_Delay()` 提供 tick。
-
-### 8.2 HAL 配置 PA0/PA1 模拟输入
-
-代码：
+### 8.2 新增：扫描和连续转换
 
 ```c
-gpio.Pin = GPIO_PIN_0 | GPIO_PIN_1;
-gpio.Mode = GPIO_MODE_ANALOG;
-HAL_GPIO_Init(GPIOA, &gpio);
+hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;       /* → CR1.SCAN=1 */
+hadc1.Init.ContinuousConvMode = ENABLE;           /* → CR2.CONT=1 */
+hadc1.Init.NbrOfConversion = 2U;                  /* → SQR1.L=1 */
 ```
 
-PA0 和 PA1 都进入模拟输入模式。
+三个字段分别对应扫描模式、连续转换、规则组长度。
 
-### 8.3 `hadc1.Init` 配扫描和连续转换
-
-代码设置：
+### 8.3 新增：两次 ConfigChannel 配 rank
 
 ```c
-hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
-hadc1.Init.ContinuousConvMode = ENABLE;
-hadc1.Init.NbrOfConversion = 2;
-```
-
-这对应打开扫描、连续转换和规则组长度为 2。
-
-### 8.4 rank 1 配通道 0
-
-代码：
-
-```c
+/* Rank 1 → SQ1 = 通道 0（PA0）*/
 ch.Channel = ADC_CHANNEL_0;
 ch.Rank = ADC_REGULAR_RANK_1;
 ch.SamplingTime = ADC_SAMPLETIME_55CYCLES_5;
 HAL_ADC_ConfigChannel(&hadc1, &ch);
-```
 
-这表示第 1 个转换位置采 PA0。
-
-### 8.5 rank 2 配通道 1
-
-代码：
-
-```c
+/* Rank 2 → SQ2 = 通道 1（PA1）*/
 ch.Channel = ADC_CHANNEL_1;
 ch.Rank = ADC_REGULAR_RANK_2;
 HAL_ADC_ConfigChannel(&hadc1, &ch);
 ```
 
-这表示第 2 个转换位置采 PA1。采样时间沿用上一次结构体中的 55.5 cycles。
+每次调用写一组 SQR + SMPR 位。Rank 1 先采，Rank 2 后采，顺序不能乱。
 
-### 8.6 校准并启动 ADC
-
-HAL 版：
+### 8.4 主循环：两次 Poll/GetValue
 
 ```c
-HAL_ADCEx_Calibration_Start(&hadc1);
-HAL_ADC_Start(&hadc1);
-```
+g_adc0 = adc_poll_and_read();    /* Rank 1 → PA0 */
+g_adc1 = adc_poll_and_read();    /* Rank 2 → PA1 */
 
-校准后启动连续扫描。注意当前 HAL 版没有显式设置 ADC 分频，工程中应确认默认分频满足 ADC 时钟限制。
-
-### 8.7 主循环读取 rank 1/rank 2
-
-代码：
-
-```c
-HAL_ADC_PollForConversion(&hadc1,10);
-g_adc0=HAL_ADC_GetValue(&hadc1);
-HAL_ADC_PollForConversion(&hadc1,10);
-g_adc1=HAL_ADC_GetValue(&hadc1);
-```
-
-第一次 Poll/GetValue 读 rank 1 的结果，第二次读 rank 2 的结果。
-
-### 8.8 PC13 心跳
-
-HAL 版主循环每轮读取两个结果后：
-
-```c
-HAL_GPIO_TogglePin(GPIOC,GPIO_PIN_13);
+if (g_adc0 > g_adc1) {
+    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+}
 HAL_Delay(300);
 ```
 
-这里 PC13 是运行指示，不根据 `g_adc0 > g_adc1` 判断。
+`PollForConversion` 每次等一个 rank 的 EOC，`GetValue` 读 DR。两次调用分别拿到 PA0 和 PA1 的结果。
 
-## 9. 两个版本真正应该怎么学
+## 9. 两个版本怎么学
 
-寄存器版重点抓：
-
-```text
-SCAN
-CONT
-SQR1.L = 2 个转换
-SQR3: SQ1=0, SQ2=1
-EOC/DR 读两次
-```
-
-HAL 版重点抓：
+寄存器版抓住规则组序列：
 
 ```text
-NbrOfConversion = 2
-Rank 1 = ADC_CHANNEL_0
-Rank 2 = ADC_CHANNEL_1
-Poll/GetValue 两次
+SCAN + CONT + SQR1.L=1 + SQR3(SQ1=0,SQ2=1) → 两次EOC/DR读取
 ```
 
-多通道扫描的关键不是“多写几个变量”，而是变量读取顺序必须严格对应规则组转换顺序。
+HAL 版抓住 rank 配置和读取：
+
+```text
+NbrOfConversion=2 + Rank1=CH0 + Rank2=CH1 → 两次Poll/GetValue
+```
+
+共同要点：**变量赋值顺序必须和规则组/rank 顺序严格一致，否则变量和引脚对不上。**
 
 ## 10. 检验问题清单
 
-### 10.1 为什么 `SQR1.L=1` 表示两个转换？
+### 10.1 `SQR1.L=1` 为什么表示 2 个转换？
 
-答：`L` 字段写的是转换数量减 1。两个转换时，`L=2-1=1`。
+**答**：`L` 写的是转换数减 1。2 个转换时 `L=2-1=1`。
 
-### 10.2 第一次读 `DR` 为什么是 PA0？
+### 10.2 第一次读 DR 为什么是 PA0？
 
-答：`SQR3.SQ1=0`，规则组第 1 个转换通道是 ADC 通道 0，也就是 PA0。
+**答**：`SQ1=0`，规则组第 1 个转换通道是 0，即 PA0。
 
-### 10.3 第二次读 `DR` 为什么是 PA1？
+### 10.3 rank 配反会怎样？
 
-答：`SQR3.SQ2=1`，规则组第 2 个转换通道是 ADC 通道 1，也就是 PA1。
+**答**：`g_adc0` 实际存的是 PA1 的值，`g_adc1` 存的是 PA0 的值。变量含义和引脚对不上。
 
-### 10.4 如果 rank 配反会怎样？
+### 10.4 不开 `SCAN` 会怎样？
 
-答：`g_adc0` 和 `g_adc1` 的物理含义会交换。你以为读 PA0，实际可能是 PA1。
+**答**：ADC 不会按多个 rank 扫描，第二个通道结果不可靠。
 
-### 10.5 不打开 `SCAN` 会怎样？
+### 10.5 `CONT=1` 有什么作用？
 
-答：ADC 不会按多个 rank 扫描，第二个通道结果不可靠或不会按预期更新。
+**答**：一轮 PA0→PA1 扫描完成后自动开始下一轮，不需要软件重新启动。
 
-### 10.6 连续转换模式有什么作用？
+### 10.6 为什么多通道扫描适合 DMA？
 
-答：一轮 PA0/PA1 扫描完成后，ADC 自动开始下一轮，不需要每轮手动启动。
+**答**：多个结果连续从同一个 DR 出来，CPU 手动读容易漏或错位。DMA 自动按顺序搬到数组。
 
-### 10.7 为什么多通道扫描适合 DMA？
+### 10.7 如果只读一次 DR 会怎样？
 
-答：多个结果连续产生，CPU 手动按 EOC 读取容易忙且容易错过。DMA 可以按顺序搬到数组。
+**答**：只拿到 rank 1 的结果，rank 2 的结果留在 DR 会被下一轮覆盖或丢失。
 
-### 10.8 HAL 版当前要注意哪个时钟细节？
+### 10.8 HAL 版 `NbrOfConversion` 仍为 1 会怎样？
 
-答：当前 HAL 版代码没有显式设置 ADC 分频。工程中应确认 ADC 时钟不超过 F103 规格限制。
+**答**：HAL 只按一个 rank 配 SQR，第二个 ConfigChannel 写的 rank 2 不生效，只采一个通道。
 
 ## 11. 工程实现步骤
 
 ### 11.1 需求分析
 
-需求是连续采样 PA0 和 PA1 两个模拟输入，并把结果分别放入 `g_adc0/g_adc1`。
-
-这要求两个引脚模拟输入正确，扫描模式打开，规则组长度和 rank 顺序正确，软件读取顺序正确。
+连续采样 PA0 和 PA1 两个模拟输入，分别存入 `g_adc0/g_adc1`。要求两个引脚模拟输入正确、扫描模式打开、规则组长度和顺序正确、读取顺序正确。
 
 ### 11.2 硬件核查
 
-确认 PA0 和 PA1 都接入 0 到 3.3V 模拟信号。
-
-两个模拟源必须和 STM32 共地。不要让任一输入超过 3.3V。
+两个电位器分别接 PA0/PA1，两端接 3.3V/GND。输入不超过 3.3V，共地。
 
 ### 11.3 寄存器路线
 
-寄存器版按这个顺序实现：
-
-1. 配置系统时钟。
-2. 配置 PC13 输出。
-3. 配置 PA0/PA1 模拟输入。
-4. 打开 ADC1 时钟。
-5. 设置 ADC 时钟分频。
-6. 设置 `SCAN` 和 `CONT`。
-7. 设置通道 0/1 采样时间。
-8. 设置 `SQR1.L=1`。
-9. 设置 `SQ1=0`、`SQ2=1`。
-10. 校准 ADC。
-11. 启动转换。
-12. 等 EOC 读 `g_adc0`。
-13. 再等 EOC 读 `g_adc1`。
+1. 时钟 72MHz、PC13 输出、PA0/PA1 模拟输入（同前课）
+2. ADC1 时钟/分频/校准（同前课）
+3. `CR1.SCAN=1, CR2.CONT=1`
+4. `SMPR2` 配 CH0/CH1 采样时间
+5. `SQR1.L=1, SQR3: SQ1=0, SQ2=1`
+6. `SWSTART` 启动
+7. 主循环：两次等 EOC → 两次读 DR → 比较控制 LED
 
 ### 11.4 HAL 路线
 
-HAL 版按这个顺序实现：
-
-1. `HAL_Init()`。
-2. 配置系统时钟。
-3. 配置 PC13 输出。
-4. 配置 PA0/PA1 为 `GPIO_MODE_ANALOG`。
-5. 打开 ADC1 时钟。
-6. 配置 `ScanConvMode = ENABLE`。
-7. 配置 `ContinuousConvMode = ENABLE`。
-8. 配置 `NbrOfConversion = 2`。
-9. rank 1 配 `ADC_CHANNEL_0`。
-10. rank 2 配 `ADC_CHANNEL_1`。
-11. 校准并启动 ADC。
-12. 两次 Poll/GetValue 读取两个结果。
+1. HAL_Init + 时钟/PC13/PA0+PA1 ANALOG（同前课）
+2. `ScanConvMode=ENABLE, ContinuousConvMode=ENABLE, NbrOfConversion=2`
+3. Rank 1 = ADC_CHANNEL_0, Rank 2 = ADC_CHANNEL_1
+4. 校准 + `HAL_ADC_Start()`
+5. 主循环：两次 Poll/GetValue → 比较控制 LED
 
 ### 11.5 工程思维
 
-多通道扫描最重要的是顺序意识。ADC 结果从同一个 `DR` 依次出来，软件必须知道当前读到的是第几个 rank。
-
-当通道数量变多、采样速度变快时，应使用 DMA 把序列结果搬到数组，避免 CPU 手动读取错位。
+多通道扫描最重要的是**顺序意识**：规则组写进去的顺序决定 DR 出来的顺序，变量赋值必须对齐。通道多了、速度快了，手动轮询容易漏，这时该用 DMA。
 
 ### 11.6 常见工程陷阱
 
-第一个陷阱是 rank 配错，变量和引脚对不上。
-
-第二个陷阱是没开扫描模式，只能正确读一个通道。
-
-第三个陷阱是读取 `DR` 次数不够或顺序错。
-
-第四个陷阱是 ADC 时钟配置不明确。
-
-第五个陷阱是模拟输入悬空导致读数乱跳。
+1. **rank 配错** — 变量和引脚对不上
+2. **没开 SCAN** — 只能正确读一个通道
+3. **读取次数不够** — 只读一次 DR，第二个通道结果丢失
+4. **模拟输入悬空** — 读数乱跳
+5. **NbrOfConversion 没改** — HAL 只按一个 rank 扫描
 
 ## 12. 运行现象
 
-寄存器版中，`g_adc0` 应随 PA0 电压变化，`g_adc1` 应随 PA1 电压变化。当 `g_adc0 > g_adc1` 时 PC13 翻转。
+两个电位器分别接 PA0 和 PA1：
 
-HAL 版中，`g_adc0/g_adc1` 同样分别保存两次转换结果；PC13 每 300ms 翻转一次，表示主循环持续运行。
+- **PA0 电位器旋到 3.3V，PA1 电位器旋到 GND**：`g_adc0` 接近 4095，`g_adc1` 接近 0，`g_adc0 > g_adc1` 成立，PC13 持续翻转（寄存器版约每 10ms 翻一次，HAL 版每 300ms 翻一次）
+- **PA0 电位器旋到 GND，PA1 电位器旋到 3.3V**：`g_adc0` 接近 0，`g_adc1` 接近 4095，`g_adc0 > g_adc1` 不成立，PC13 保持当前状态不翻转
+- **两个电位器旋到相同位置**：`g_adc0 ≈ g_adc1`，PC13 偶尔翻转（因为两个通道值在阈值附近抖动）
 
-用调试器观察变量，比只看 LED 更可靠。
+用调试器观察 `g_adc0` 和 `g_adc1`：旋转 PA0 电位器时只有 `g_adc0` 变化，旋转 PA1 电位器时只有 `g_adc1` 变化。如果两个值同时变化或对不上，说明 rank 配反了。
 
 ## 13. 常见问题排查
 
 ### 13.1 两个值都不变化
 
-检查 PA0/PA1 是否有模拟输入，是否配置为模拟输入，ADC 是否启动。
-
-HAL 版检查 `HAL_ADC_Start()` 是否执行。
+检查 PA0/PA1 是否有模拟输入、是否配成模拟输入、ADC 是否启动（SWSTART 或 HAL_ADC_Start）。
 
 ### 13.2 两个变量和电位器对应反了
 
-检查 `SQR3` 或 HAL rank 配置。
-
-如果 rank 1 是通道 1、rank 2 是通道 0，变量含义就会交换。
+`SQR3` 或 HAL rank 配反了。rank 1 应是通道 0（PA0），rank 2 应是通道 1（PA1）。
 
 ### 13.3 第二个通道读数异常
 
-检查是否打开扫描模式，规则组长度是否为 2，是否读取了两次 `DR`。
-
-只读一次只会拿到一个 rank 的结果。
+没开扫描模式，或规则组长度不是 2，或只读了一次 DR。
 
 ### 13.4 读数抖动大
 
-检查模拟输入是否悬空，电位器是否共地，采样时间是否足够。
+模拟输入悬空、没共地、采样时间太短。寄存器版用 239.5 cycles；HAL 版用 55.5 cycles，可改长。
 
-寄存器版使用最长采样时间；HAL 版使用 55.5 cycles，必要时可改长。
+## 14. 本课结论
 
-### 13.5 ADC 时钟可能超规格
+1. `SCAN=1` 让 ADC 按规则组序列依次转换多个通道
+2. `SQR1.L` 写转换数减 1，`SQR3` 写每个位置采哪个通道
+3. DR 每次只给出当前转换结果，软件必须按顺序读取
+4. 变量赋值顺序必须和规则组/rank 顺序严格一致
+5. `CONT=1` 让一轮扫描完成后自动开始下一轮
+6. HAL 的 rank 对应底层规则组序列位置
+7. 多通道扫描和 DMA 是天然搭档——下一课就学
 
-寄存器版显式设置 PCLK2/6。HAL 版当前代码未显式设置 ADC 分频，建议补充或确认默认配置，避免 ADC 时钟超过规格。
+## 15. 阅读建议
 
-## 14. 本课最核心的结论
+先画一个两格序列：rank 1 = PA0，rank 2 = PA1。
 
-- 多通道扫描让 ADC 按规则组序列依次转换多个通道。
-- PA0/PA1 必须都配置为模拟输入。
-- `SCAN` 打开后，ADC 才会按多个 rank 扫描。
-- `SQR1.L` 设置转换数量，`SQR3` 设置每个位置采哪个通道。
-- `DR` 每次只给出当前转换结果，软件必须按顺序读取。
-- HAL 的 rank 概念对应底层规则组序列位置。
-- 多通道扫描和 DMA 是天然搭档。
+然后看寄存器版 `SQR1/SQR3`，确认这个序列怎么写进 ADC。再看主循环两次 EOC/DR 读取，确认顺序对齐。
 
-## 15. 建议你现在怎么读这节课
-
-先画一个两格序列：rank 1 是 PA0，rank 2 是 PA1。
-
-然后看寄存器版 `SQR1/SQR3`，确认这个序列是怎么写进 ADC 的。
-
-最后看主循环，两次 EOC、两次 DR 读取必须和序列顺序对齐。
+最后看 HAL 版两次 `ConfigChannel` 和两次 `Poll/GetValue`，理解 rank 和读取的对应关系。
 
 ## 16. 扩展练习
 
-1. 交换 PA0/PA1 的 rank，观察 `g_adc0/g_adc1` 含义变化。
-2. 把 HAL 版采样时间改成 239.5 cycles，比较读数稳定性。
-3. 增加第三个通道，思考 `SQR1.L` 和读取次数怎么改。
-4. 故意只读一次 `DR`，观察第二个变量是否更新。
-5. 思考用 DMA 时，数组下标和 rank 如何对应。
+1. 交换 PA0/PA1 的 rank，观察 `g_adc0/g_adc1` 含义变化
+2. 把 HAL 版采样时间改成 239.5 cycles，比较读数稳定性
+3. 增加第三个通道 PA2，思考 `SQR1.L` 和读取次数怎么改
+4. 故意只读一次 DR，观察第二个变量是否更新
+5. 思考用 DMA 时，数组下标和 rank 如何对应
 
 ## 17. 下一课预告
 
@@ -636,4 +387,4 @@ HAL 版检查 `HAL_ADC_Start()` 是否执行。
 
 下一课：[18_dma_basic](../18_dma_basic/README.md)
 
-下一课会学习 DMA 基础。DMA 可以在外设和内存之间自动搬运数据，为后面的 ADC DMA 多通道采样打基础。
+下一课学习 DMA 基础。DMA 可以在外设和内存之间自动搬运数据，为 ADC 多通道 DMA 采样打基础。

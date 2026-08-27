@@ -2,34 +2,27 @@
 
 ## 1. 本课到底在学什么
 
-本课表面现象很简单：PA1 上的模拟电压变化后，`g_adc_value` 会被自动刷新，主循环根据它控制 PC13 LED。
+本课表面现象：PA1 接电位器，旋转时 `g_adc_value` 自动刷新，超过 2048 时 PC13 亮、低于时灭。主循环里看不到任何读 ADC 寄存器的代码。
 
-真正要学的是 STM32 里一条非常重要的数据通路：
+真正要学的是 DMA 数据通路：
 
 ```text
-PA1 模拟电压
-  -> ADC1_IN1
-  -> ADC1 规则组连续转换
-  -> ADC1->DR 出现新结果
-  -> ADC 发出 DMA 请求
-  -> DMA1_Channel1 自动读取 DR
-  -> 写入 RAM 变量 g_adc_value
-  -> CPU 只读内存变量控制 LED
+PA1 模拟电压 → ADC1_IN1 → ADC1 连续转换 → DR 出新结果
+→ ADC 发 DMA 请求 → DMA1_Channel1 自动读 DR → 写入 RAM g_adc_value
+→ CPU 只读内存变量控制 LED
 ```
 
-前几节 ADC 课里，CPU 要么轮询 `EOC`，要么进 ADC 中断后读取 `DR`。本课开始，CPU 不再亲自搬 ADC 数据。ADC 完成转换后，由 DMA 控制器在后台把数据从外设寄存器搬到内存变量。你要学会分清：ADC 负责“产生数据”，DMA 负责“搬数据”，CPU 负责“消费已经在内存里的数据”。
+**核心变化：CPU 从"亲自搬数据"变成"数据已经被搬好了，直接用"。** 前几课 CPU 要么轮询 EOC，要么进中断读 DR；本课开始，DMA 在后台把 ADC 数据搬到内存，CPU 只消费内存里的数据。
 
 ## 2. 本课学习目标
 
-学完本课，你至少要能做到：
-
-- 说清楚为什么 ADC1 在 STM32F103 上使用 `DMA1_Channel1`。
-- 解释 `CPAR`、`CMAR`、`CNDTR`、`CCR` 分别决定 DMA 的哪一部分行为。
-- 解释 `ADC_CR2_CONT` 和 `ADC_CR2_DMA` 为什么要同时出现。
-- 说清楚为什么 DMA 要先使能，ADC 再 `SWSTART`。
-- 看懂 HAL 版里 `DMA_HandleTypeDef` 每个字段对应 DMA 哪些寄存器位。
-- 看懂 `__HAL_LINKDMA(&hadc1, DMA_Handle, hdma_adc1)` 为什么不是装饰代码。
-- 根据 LED 不变化、变量不更新、数值异常等现象反推可能错在哪一层。
+1. 为什么 ADC1 在 F103 上固定用 `DMA1_Channel1`？
+2. `CPAR`、`CMAR`、`CNDTR`、`CCR` 分别决定 DMA 的哪部分行为？
+3. `CONT` 和 `DMA` 位为什么要同时出现？
+4. 为什么 DMA 要先使能、ADC 再 SWSTART？
+5. `CIRC=1` 不开会怎样？`MINC=1` 误开会怎样？
+6. `__HAL_LINKDMA` 不写会怎样？
+7. `volatile` 在这里为什么比中断课更重要？
 
 ## 3. 本课目录结构
 
@@ -44,518 +37,420 @@ PA1 模拟电压
     └── src/main.c
 ```
 
-`reg/src/main.c` 把 ADC 和 DMA 的寄存器配置摊开写；`hal/src/main.c` 使用 HAL 句柄和 API 完成同一件事。两个版本的最终目标一样：让 ADC1 连续采样 PA1，并让 DMA 自动把最新结果写入内存。
-
 ## 4. 实验硬件
 
-本课使用 STM32F103C8T6 BluePill，工程板卡是 `genericSTM32F103C8`。时钟假设为外部 8MHz HSE，经 PLL 配到 72MHz。
+- STM32F103C8T6 BluePill
+- ST-Link 下载器
+- 电位器（推荐 10kΩ），接法：中间脚 → PA1，两端 → 3.3V/GND
+- PC13 板载 LED
 
-引脚和观察点如下：
+**PA1 输入不能超过 3.3V。外部模拟源必须共地。**
 
-- `PA1`：模拟输入，对应 `ADC1_IN1`。可以接电位器中间端，电位器两端接 `3.3V` 和 `GND`。
-- `PC13`：板载 LED 输出。BluePill 上通常是低电平点亮。
-- `ST-Link`：下载和调试。
+## 5. 先建立一个最基本的脑图
 
-注意：PA1 输入电压不能超过芯片供电范围。ADC 只能测 0 到 VDDA 附近的电压，不能直接接 5V。
+```text
+1. 系统时钟 72MHz
+2. PC13 推挽输出
+3. PA1 模拟输入
+4. ★ 开 DMA1 时钟（AHBENR，不是 APB2ENR）
+5. ★ 配 DMA1_Channel1：CPAR=&ADC1->DR, CMAR=&g_adc_value, CNDTR=1
+6. ★ CCR：CIRC=1, PSIZE=16bit, MSIZE=16bit, PINC=0, MINC=0
+7. ADC1 时钟 PCLK2/6 = 12MHz，规则组通道 1，采样 239.5 cycles
+8. ★ CR2.CONT=1（连续转换）+ CR2.DMA=1（允许 DMA 请求）
+9. ADC 上电校准
+10. ★ 先使能 DMA 通道（CCR.EN=1）→ 再 SWSTART 启动 ADC
+11. 主循环只读 g_adc_value → 控制 LED
+```
 
-## 5. 先建立完整脑图
-
-本课从现象到底层，可以拆成六层：
-
-1. 现象层：转动电位器，`g_adc_value` 自动变化，超过 2048 时 LED 状态改变。
-2. 物理层：PA1 上的模拟电压进入芯片 ADC 输入通道，PC13 输出电平驱动 LED。
-3. 芯片模块层：GPIOA 提供模拟输入脚，ADC1 完成模数转换，DMA1_Channel1 搬运 ADC 数据，GPIOC 控制 LED。
-4. 寄存器层：`ADC1->DR` 保存转换结果，`ADC1->CR2.DMA` 允许 ADC 发 DMA 请求，`DMA1_Channel1->CPAR/CMAR/CNDTR/CCR` 决定搬运路径。
-5. C/CMSIS 层：`ADC1`、`DMA1_Channel1`、`RCC->AHBENR`、`volatile g_adc_value` 都是 C 代码访问硬件的入口。
-6. HAL 工程层：`ADC_HandleTypeDef`、`DMA_HandleTypeDef`、`HAL_DMA_Init()`、`HAL_ADC_Start_DMA()` 把这些寄存器动作封装成结构体字段和函数调用。
-
-代码顺序也来自这张脑图：先配系统时钟，再配 LED，再配 PA1 模拟输入，再配 DMA 通道，再配 ADC 连续转换和 DMA 请求，最后先启动 DMA、再启动 ADC。
+第 4~6 步是 DMA 配置，第 8 步是 ADC 侧的 DMA 请求使能，第 10 步是启动顺序。这三块是本课全部新增。
 
 ## 6. 核心名词解释
 
-### 6.1 `DMA` 是什么
+### 6.1 已学名词速查
 
-`DMA` 是 Direct Memory Access，中文常叫直接存储器访问。它属于芯片内部的硬件控制器，不属于 GPIO、ADC 这种单一外设，也不是 C 语言函数。
+以下名词在第 15~17 课已详细讲过，本课不再重复：
 
-它控制的是“数据搬运行为”：从哪个地址读、写到哪个地址、搬多少个数据、每次地址是否自增、搬完后停止还是循环。本课里，DMA 不改变 ADC 的采样精度，也不决定 PA1 的电压；它只负责把 `ADC1->DR` 里的结果搬到 `g_adc_value`。
+| 名词 | 一句话提醒 |
+|------|-----------|
+| `ADC1_IN1 / PA1` | PA1 第二功能是 ADC1 通道 1，配模拟输入 |
+| `ADCPRE = PCLK2/6` | 12MHz，不能超 14MHz |
+| `SQR1.L=0, SQR3.SQ1=1` | 规则组只采 1 个通道，就是通道 1 |
+| `SMPR2.SMP1=111` | 239.5 cycles 采样时间 |
+| `ADON / RSTCAL / CAL` | 上电 → 复位校准 → 执行校准 |
+| `EXTTRIG / SWSTART` | 允许触发 + 软件启动转换 |
+| `EOC` | 转换完成标志 |
+| `DR` | 数据寄存器，12 位结果 |
+| `CONT` | 连续转换模式，CR2 bit 1 |
+| `GPIO_MODE_ANALOG` | HAL 模拟输入模式 |
+| `volatile` | 防止编译器优化掉异步修改的变量 |
 
-它出现在本课，是因为 ADC 会不断产生数据。如果 CPU 每次都轮询或进中断读取，CPU 时间会被频繁打断。DMA 让“外设数据进入内存”这件事由硬件完成。配置错时，常见现象是 `g_adc_value` 一直为 0、保持旧值、LED 不随电压变化，或者内存变量被错误写坏。
+本课新增重点在下面。
 
-### 6.2 `DMA1_Channel1` 是什么
+### 6.2 `DMA` 是什么
 
-`DMA1_Channel1` 是 DMA1 控制器的第 1 个通道，属于芯片 DMA 模块。STM32F103 的 DMA 请求和通道有固定映射，ADC1 的 DMA 请求固定接到 DMA1_Channel1。
+Direct Memory Access，直接存储器访问。它是芯片内部的硬件控制器，不属于某个单一外设。
 
-它控制的是本课 ADC 数据的搬运通道。ADC1 完成一次转换后，只有对应通道使能并配置正确，DMA 才会响应这次请求。如果误用其他通道，代码可能仍能编译，但 ADC 请求到不了那个通道，`g_adc_value` 不会更新。
+DMA 控制"数据搬运行为"：从哪个地址读、写到哪个地址、搬多少个、地址是否自增、搬完停止还是循环。本课 DMA 只做一件事：把 `ADC1->DR` 的值搬到 `g_adc_value`。
 
-在寄存器版中它出现在 `dma1_channel1_init()`；HAL 版中对应 `hdma_adc1.Instance = DMA1_Channel1`。
+配置错时常见现象：`g_adc_value` 一直为 0、保持旧值、或内存被写坏。
 
-### 6.3 `CPAR` 是什么
+### 6.3 `DMA1_Channel1` 是什么
 
-`CPAR` 是 DMA Channel Peripheral Address Register，外设地址寄存器，属于 DMA 通道寄存器。
+F103 的 DMA 请求和通道有**固定映射**。ADC1 的 DMA 请求硬连线接到 DMA1_Channel1，不是软件可选的。
 
-它保存 DMA 外设端的地址。本课方向是外设到内存，所以 `CPAR = (uint32_t)&ADC1->DR`，意思是每次从 ADC 数据寄存器读取。注意这里取的是 `DR` 的地址，不是 `DR` 当前的数值。
+误用其他通道，代码能编译，但 ADC 请求到不了那个通道，`g_adc_value` 不会更新。
 
-如果 `CPAR` 写错，DMA 会从错误地址取数。轻则变量一直不对，重则访问了不该访问的外设地址，调试时表现为结果随机或完全不变化。
+### 6.4 `CPAR` 是什么
 
-### 6.4 `CMAR` 是什么
+Channel Peripheral Address Register，外设地址寄存器。保存 DMA 读数据的源地址。
 
-`CMAR` 是 DMA Channel Memory Address Register，内存地址寄存器，属于 DMA 通道寄存器。
+本课 `CPAR = (uint32_t)&ADC1->DR`，取的是 DR 的**地址**，不是 DR 的值。写错则 DMA 从错误地址取数，结果随机或不变化。
 
-它保存 DMA 内存端的地址。本课写成 `CMAR = (uint32_t)&g_adc_value`，表示把 ADC 结果写入这个 RAM 变量。因为 `g_adc_value` 只保存最新一次结果，所以本课没有打开内存地址自增。
+### 6.5 `CMAR` 是什么
 
-如果 `CMAR` 写错，DMA 会把 ADC 数据写到错误 RAM 位置，可能导致变量不更新、其他变量被改坏，甚至程序跑飞。
+Channel Memory Address Register，内存地址寄存器。保存 DMA 写数据的目标地址。
 
-### 6.5 `CNDTR` 是什么
+本课 `CMAR = (uint32_t)&g_adc_value`。写错则 ADC 数据被写到错误 RAM 位置，可能导致其他变量被改坏或程序跑飞。
 
-`CNDTR` 是 DMA Channel Number of Data Register，传输数量寄存器，属于 DMA 通道寄存器。
+### 6.6 `CNDTR` 是什么
 
-它决定一轮 DMA 要搬多少个数据单元。本课只需要一个“最新 ADC 值”，所以 `CNDTR = 1U`。每完成一次传输，硬件会让计数递减；因为打开了循环模式，减到 0 后会重新装载初始值继续工作。
+Channel Number of Data Register，传输数量寄存器。决定一轮 DMA 搬多少个数据单元。
 
-如果 `CNDTR` 太小，数据不够；如果太大而内存没有对应空间，就可能越界写内存。本课长度为 1，正好匹配单个变量。
+本课 `CNDTR = 1`，只搬 1 个半字。配合循环模式，每次 ADC 请求来时这个 1 被反复装载。设太大而内存没有对应空间会越界写内存。
 
-### 6.6 `CCR` 是什么
+### 6.7 `CCR` 是什么
 
-这里的 `CCR` 是 DMA Channel Configuration Register，通道配置寄存器，属于 DMA 通道。它不是定时器的捕获比较寄存器，名字相同但上下文不同。
+Channel Configuration Register，通道配置寄存器（注意不是定时器的 CCR）。控制 DMA 主要行为：方向、循环模式、地址自增、数据宽度、优先级、使能。
 
-它控制 DMA 的主要行为：是否使能、方向、循环模式、外设地址是否自增、内存地址是否自增、外设数据宽度、内存数据宽度、优先级等。本课设置 `CIRC=1`、`PSIZE=16bit`、`MSIZE=16bit`、`PL=高`，并保持 `DIR=0`、`PINC=0`、`MINC=0`。
+本课关键设置：`CIRC=1`（循环）、`PSIZE=MSIZE=16bit`、`PINC=MINC=0`、`DIR=0`（外设→内存）、`PL=高`。
 
-如果 `CCR` 配错，现象非常直接：方向错会搬反，宽度错会数据错位，循环模式没开会只更新一次，通道没使能则完全不搬。
+### 6.8 `CIRC`（循环模式）是什么
 
-### 6.7 `DMA_CCR_CIRC` 是什么
+`CCR.CIRC` 位。`CIRC=1` 时，一轮传输完成后自动重载 `CNDTR` 继续响应下一次请求。
 
-`DMA_CCR_CIRC` 是 DMA 循环模式位，对应 `CCR.CIRC`。
+本课 ADC 连续转换，DMA 必须循环接收。不开 `CIRC`，`g_adc_value` 只更新第一次，之后电位器怎么转都不变了。这是 ADC+DMA 初学最容易误判成 ADC 没工作的点。
 
-本课 ADC 是连续转换，DMA 也必须连续接收结果。打开循环模式后，一轮传输完成不会停止，而是重新装载 `CNDTR` 继续响应下一次 ADC 请求。
+### 6.9 `PSIZE` / `MSIZE` 是什么
 
-如果不打开它，`g_adc_value` 通常只更新第一次，之后转动电位器 LED 不再随之变化。这是 ADC+DMA 初学时很容易误判成 ADC 没工作的点。
+外设端/内存端数据宽度。ADC 结果 12 位存在 16 位 DR 里，所以两端都按半字（16bit）搬运。
 
-### 6.8 `DMA_CCR_PSIZE` 和 `DMA_CCR_MSIZE` 是什么
+设成 8 位会截断结果；设成 32 位会多读/多写相邻内存。两端宽度应保持一致。
 
-`PSIZE` 是外设端数据宽度，`MSIZE` 是内存端数据宽度，都属于 DMA `CCR`。
+### 6.10 `PINC` / `MINC` 是什么
 
-STM32F103 ADC 结果是 12 位，但存放在 16 位数据寄存器有效位里，所以本课按半字 16 位搬运。寄存器版设置 `DMA_CCR_PSIZE_0` 和 `DMA_CCR_MSIZE_0`；HAL 版对应 `DMA_PDATAALIGN_HALFWORD` 和 `DMA_MDATAALIGN_HALFWORD`。
+外设地址/内存地址自增控制。本课源地址始终是 `ADC1->DR`，目标始终是 `g_adc_value`，所以两个都不开。
 
-如果宽度设成 8 位，结果会被截断；如果内存变量和 DMA 宽度不匹配，可能出现数值异常或相邻内存被影响。
+误开 `MINC`，DMA 第一次写 `g_adc_value`，后面写到后续地址，变量只变一次，还可能破坏别的内存。下一课多通道 DMA 会打开 `MINC` 写数组。
 
-### 6.9 `DMA_CCR_MINC` 和 `DMA_CCR_PINC` 是什么
+### 6.11 `CR2.DMA` 位是什么
 
-`MINC` 控制内存地址自增，`PINC` 控制外设地址自增，属于 DMA `CCR`。
+ADC 的 DMA 请求使能位（CR2 bit 8）。`DMA=1` 后，ADC 每次转换完成会向 DMA 控制器发请求。
 
-本课源地址始终是 `ADC1->DR`，目标地址始终是 `g_adc_value`，所以两个自增都不打开。下一类“数组缓冲区”实验会打开 `MINC`，让 DMA 依次写入数组不同元素。
+这是 ADC 和 DMA 之间的"握手开关"。不设它，DMA 通道配得再对也收不到 ADC 请求，`g_adc_value` 不更新。
 
-如果本课误开 `MINC`，DMA 第一次写 `g_adc_value`，后面会写到后续地址，变量看起来可能只变化一次，还可能破坏别的内存。
+### 6.12 `__HAL_LINKDMA` 是什么
 
-### 6.10 `ADC_CR2_CONT` 是什么
+HAL 的句柄关联宏。`__HAL_LINKDMA(&hadc1, DMA_Handle, hdma_adc1)` 把 ADC 句柄的 `DMA_Handle` 成员指向 DMA 句柄。
 
-`ADC_CR2_CONT` 是 ADC 连续转换模式位，属于 ADC1 的 `CR2` 寄存器。
+不写这步，`HAL_ADC_Start_DMA()` 不知道用哪个 DMA 通道，会返回错误。
 
-它控制 ADC 转换是否自动接续。`CONT=1` 后，只要第一次软件启动，ADC 转完一次会自动开始下一次。它解决的是“ADC 是否持续产生数据”的问题，不解决“数据怎么进内存”的问题。
+### 6.13 `HAL_ADC_Start_DMA` 是什么
 
-如果不打开 `CONT`，ADC 只转换一次，DMA 也只能搬一次，`g_adc_value` 后续不会持续刷新。
+HAL 启动 ADC+DMA 的函数。接收 ADC 句柄、目标内存地址、长度。内部做了：配 DMA 地址和计数 → 使能 DMA 通道 → 打开 ADC DMA 请求 → 启动 ADC 转换。
 
-### 6.11 `ADC_CR2_DMA` 是什么
-
-`ADC_CR2_DMA` 是 ADC 的 DMA 请求使能位，属于 ADC1 的 `CR2` 寄存器。
-
-它控制 ADC 完成转换后是否向 DMA 控制器发请求。本课必须打开它，否则 DMA 通道即使配置正确，也收不到 ADC 的搬运触发。
-
-这个位是 ADC 和 DMA 之间的“握手开关”。如果没设，常见现象是 ADC 自己可能在转换，但 `g_adc_value` 不更新。
-
-### 6.12 `ADC1->DR` 是什么
-
-`DR` 是 ADC Data Register，数据寄存器，属于 ADC1。
-
-每次规则组转换完成后，ADC 把转换结果放到 `DR`。在轮询和中断课里，CPU 读 `DR`；本课里，DMA 读 `DR`。这说明数据源没有变，只是读取者从 CPU 换成了 DMA。
-
-如果 `CPAR` 没有指向 `&ADC1->DR`，DMA 就拿不到真正的 ADC 结果。
-
-### 6.13 `volatile g_adc_value` 是什么
-
-`g_adc_value` 是 RAM 中的全局变量，`volatile` 是 C 语言层面的限定符。
-
-它不是寄存器，但它会被 DMA 硬件异步修改。`volatile` 告诉编译器：每次主循环读取这个变量时都要从内存重新取，不要假设它在 C 代码没有赋值时就不会变化。
-
-如果去掉 `volatile`，优化级别较高时主循环可能读到缓存值，表现为 DMA 实际已经写内存，但 C 代码看起来像没更新。
-
-### 6.14 `HAL_DMA_Init` 是什么
-
-`HAL_DMA_Init()` 是 HAL 的 DMA 初始化函数，属于 HAL 工程层。
-
-它读取 `DMA_HandleTypeDef.Init` 中的方向、自增、宽度、模式、优先级等字段，然后写 DMA 通道的 `CCR` 等寄存器。本课它不负责启动 ADC，也不负责设置 ADC 通道；它只把 DMA 通道本身准备好。
-
-如果字段填错，HAL 仍然会认真把错误配置写到底层寄存器里。HAL 不是防止你理解硬件的屏障，它只是换了一种表达方式。
-
-### 6.15 `__HAL_LINKDMA` 是什么
-
-`__HAL_LINKDMA()` 是 HAL 的句柄关联宏，属于 HAL 工程层。
-
-本课写的是 `__HAL_LINKDMA(&hadc1, DMA_Handle, hdma_adc1)`，含义是把 ADC 句柄里的 `DMA_Handle` 成员指向 `hdma_adc1`。之后 `HAL_ADC_Start_DMA()` 才知道要使用哪个 DMA 通道。
-
-如果缺少这一步，ADC 句柄和 DMA 句柄各自存在但没有关系，HAL 启动 DMA 时找不到对应通道，可能返回错误或无法完成启动。
-
-### 6.16 `HAL_ADC_Start_DMA` 是什么
-
-`HAL_ADC_Start_DMA()` 是 HAL 启动 ADC+DMA 的函数，属于 HAL 工程层。
-
-它接收 ADC 句柄、目标内存地址和长度。本课调用 `HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&g_adc_value, 1U)`，等价于告诉 HAL：用 ADC1，借助关联的 DMA1_Channel1，把 ADC 结果写入 `g_adc_value`，长度为 1。
-
-它对应寄存器版的组合动作：配置 DMA 地址和计数、使能 DMA 通道、打开 ADC DMA 请求、启动 ADC 软件转换。参数地址或长度错时，底层搬运目标就会错。
+对应寄存器版的组合动作：CCR.EN + CR2.DMA + CR2.CONT + SWSTART。
 
 ## 7. 寄存器版代码逐步讲解
 
-### 7.1 系统时钟为什么先配
+### 7.1 已学步骤（快速过）
 
-`system_clock_72mhz_init()` 先配置 Flash 等待周期，再打开 HSE，等待 `HSERDY`，然后配置 PLL 到 72MHz。
+1. `system_clock_72mhz_init()` — HSE 8MHz → PLL x9 → 72MHz
+2. `led_pc13_init()` — PC13 推挽输出，初始高电平灭
+3. `pa1_adc_input_init()` — PA1 模拟输入
+4. ADC1 时钟 PCLK2/6 = 12MHz，规则组通道 1，采样 239.5 cycles
+5. ADC 上电校准（ADON → RSTCAL → CAL）
 
-ADC 时钟来自 PCLK2 分频，软件延时也依赖 CPU 频率。先把系统时钟定下来，后面的 ADC 分频、串行时序和延时才有稳定基准。
-
-### 7.2 PC13 LED 初始化
-
-`led_pc13_init()` 先设置 `RCC->APB2ENR |= RCC_APB2ENR_IOPCEN`，让 GPIOC 获得时钟。
-
-然后清 `GPIOC->CRH` 中的 `MODE13/CNF13`，再设置 `GPIO_CRH_MODE13_1`，使 PC13 成为 2MHz 通用推挽输出。最后写 `GPIOC->BSRR = GPIO_BSRR_BS13`，让 LED 初始熄灭。PC13 是本课现象层输出，用于观察 ADC+DMA 结果是否进入主循环判断。
-
-### 7.3 PA1 配成模拟输入
-
-`pa1_adc_input_init()` 打开 GPIOA 时钟，然后清 `GPIOA->CRL` 中的 `MODE1/CNF1`。
-
-在 STM32F1 里，GPIO 模式为 `MODE=00, CNF=00` 表示模拟输入。PA1 对应 ADC1_IN1。只有先把引脚数字输入输出缓冲关到模拟模式，ADC 才能稳定采样这一路电压。
-
-### 7.4 DMA1 时钟来自 AHB
-
-`dma1_channel1_init()` 的第一句是：
+### 7.2 新增：开 DMA1 时钟
 
 ```c
 RCC->AHBENR |= RCC_AHBENR_DMA1EN;
 ```
 
-DMA1 挂在 AHB 总线上，所以使能位在 `AHBENR`，不是 GPIO/ADC 常用的 `APB2ENR`。如果漏掉这一句，后面写 DMA 通道寄存器不会让 DMA 硬件真正工作。
+DMA1 挂 AHB 总线，使能位在 `AHBENR`，不是 GPIO/ADC 常用的 `APB2ENR`。漏掉这句，DMA 寄存器写了也不工作。
 
-### 7.5 配置 DMA 前先关闭通道
+### 7.3 新增：配 DMA 前先关通道
 
 ```c
 DMA1_Channel1->CCR &= ~DMA_CCR_EN;
 ```
 
-DMA 通道使能时，部分配置寄存器不应该被随意改。先清 `EN`，让通道停在可配置状态，再写 `CNDTR/CPAR/CMAR/CCR`。如果运行中改配置，可能出现写入无效或本轮传输状态混乱。
+通道使能时部分配置寄存器不能改。先清 EN 让通道停在可配置状态。
 
-### 7.6 `CNDTR = 1`
-
-```c
-DMA1_Channel1->CNDTR = 1U;
-```
-
-本课目标不是保存一段波形数组，而是保存“最新一个 ADC 值”。所以一轮 DMA 只搬 1 个半字。配合循环模式，每次 ADC 请求来时，这个 1 会被反复装载使用。
-
-### 7.7 `CPAR` 指向 ADC 数据寄存器
+### 7.4 新增：配 DMA 五要素
 
 ```c
-DMA1_Channel1->CPAR = (uint32_t)&ADC1->DR;
+DMA1_Channel1->CNDTR = 1U;                              /* 搬 1 个 */
+DMA1_Channel1->CPAR  = (uint32_t)&ADC1->DR;             /* 从哪读 */
+DMA1_Channel1->CMAR  = (uint32_t)&g_adc_value;          /* 写到哪 */
 ```
 
-这句决定 DMA 从哪里读。`&ADC1->DR` 是 ADC 数据寄存器地址。ADC 每次转换完成后，新结果出现在这里，DMA 响应请求时从这里取走。
+三个地址/计数寄存器决定搬运路径。`CPAR` 取的是 DR 的地址不是值。
 
-### 7.8 `CMAR` 指向内存变量
+### 7.5 新增：配 CCR 行为
 
 ```c
-DMA1_Channel1->CMAR = (uint32_t)&g_adc_value;
+DMA1_Channel1->CCR &= ~(DMA_CCR_MEM2MEM | DMA_CCR_PL |
+    DMA_CCR_MSIZE | DMA_CCR_PSIZE | DMA_CCR_MINC |
+    DMA_CCR_PINC | DMA_CCR_CIRC | DMA_CCR_DIR);
+
+DMA1_Channel1->CCR |= DMA_CCR_CIRC;      /* 循环模式 */
+DMA1_Channel1->CCR |= DMA_CCR_PSIZE_0;   /* 外设 16bit */
+DMA1_Channel1->CCR |= DMA_CCR_MSIZE_0;   /* 内存 16bit */
+DMA1_Channel1->CCR |= DMA_CCR_PL_1;      /* 优先级高 */
 ```
 
-这句决定 DMA 写到哪里。目标是 RAM 中的 `g_adc_value`。主循环不读 `ADC1->DR`，只读这个变量，因为 DMA 会持续刷新它。
+先清再设，防止残留配置干扰。`DIR=0`（默认）= 外设→内存。`CIRC=1` 让 DMA 持续接收。`PINC=MINC=0` 因为地址都固定。
 
-### 7.9 `CCR` 清位再设位
-
-代码先清掉 `MEM2MEM/PL/MSIZE/PSIZE/MINC/PINC/CIRC/DIR` 等位，再重新设置本课需要的值。
-
-本课方向保持 `DIR=0`，表示外设到内存；`PINC=0`，因为外设地址一直是 `ADC1->DR`；`MINC=0`，因为目标一直是同一个变量；`CIRC=1`，因为 ADC 连续转换；`PSIZE/MSIZE=16bit`，因为 ADC 结果按半字搬运；`PL=高`，让 ADC 数据搬运优先级更高。
-
-### 7.10 ADC 时钟和 ADC 分频
-
-`adc1_init()` 打开 `RCC_APB2ENR_ADC1EN`，再设置：
+### 7.6 新增：ADC 侧 CONT + DMA
 
 ```c
-RCC->CFGR &= ~RCC_CFGR_ADCPRE;
-RCC->CFGR |= RCC_CFGR_ADCPRE_DIV6;
+ADC1->CR2 |= ADC_CR2_CONT;    /* 连续转换 */
+ADC1->CR2 |= ADC_CR2_DMA;     /* 允许 DMA 请求 */
 ```
 
-系统 PCLK2 是 72MHz，ADC 时钟不能太高，除以 6 后是 12MHz，处在 STM32F103 ADC 可用范围内。ADC 时钟不合适会导致采样不稳定或转换结果不可靠。
+`CONT` 让 ADC 持续产生数据，`DMA` 让每次结果产生后通知 DMA 搬运。一个负责"持续生产"，一个负责"请求搬运"，缺一个链路都不完整。
 
-### 7.11 ADC 规则组选择通道 1
-
-`ADC1->SQR1` 清 `L`，表示规则序列长度为 1；`ADC1->SQR3` 设置第一个转换槽为通道 1，即 `ADC1_IN1`。
-
-这一步把“PA1 这根脚”连接到“规则组第一次转换”。如果序列通道写错，ADC 会采样别的通道，表现为电位器怎么转都不对应。
-
-### 7.12 采样时间设置
-
-`ADC1->SMPR2` 中通道 1 的采样时间被设为较长采样周期。
-
-采样时间属于 ADC 模拟前端行为：采样电容需要时间充到接近输入电压。电位器阻抗较高时，采样时间太短会导致读数偏差或跳动。
-
-### 7.13 `CONT` 和 `DMA` 是 ADC+DMA 的核心组合
+### 7.7 新增：启动顺序——先 DMA 后 ADC
 
 ```c
-ADC1->CR2 |= ADC_CR2_CONT;
-ADC1->CR2 |= ADC_CR2_DMA;
+DMA1_Channel1->CCR |= DMA_CCR_EN;                        /* 先开 DMA */
+ADC1->CR2 |= ADC_CR2_EXTTRIG | ADC_CR2_SWSTART;         /* 再启动 ADC */
 ```
 
-`CONT` 让 ADC 持续产生转换结果；`DMA` 让每次结果产生后通知 DMA 搬运。一个负责“持续生产”，一个负责“请求搬运”。少任何一个，自动刷新链路都不完整。
+先让 DMA 进入响应状态，再让 ADC 开始转换。顺序反了，第一笔 ADC 数据出来时 DMA 还没准备好，会丢失。
 
-### 7.14 ADC 上电和校准
-
-代码设置 `ADON`，短暂延时，然后执行 `RSTCAL` 和 `CAL`，并等待硬件清位。
-
-STM32F1 ADC 使用前需要校准。校准属于模拟模块自身的准备动作，目的是减小偏差。没有校准时程序可能能跑，但数值精度和稳定性会变差。
-
-### 7.15 启动顺序：先 DMA 后 ADC
-
-`adc1_dma_start()` 先执行：
+### 7.8 主循环只读内存变量
 
 ```c
-DMA1_Channel1->CCR |= DMA_CCR_EN;
+if (g_adc_value > 2048U) {
+    GPIOC->BRR = GPIO_BRR_BR13;     /* LED 亮 */
+} else {
+    GPIOC->BSRR = GPIO_BSRR_BS13;   /* LED 灭 */
+}
 ```
 
-再执行：
-
-```c
-ADC1->CR2 |= ADC_CR2_EXTTRIG | ADC_CR2_SWSTART;
-```
-
-先让 DMA 通道进入响应状态，再让 ADC 开始转换。这样第一笔 ADC 数据出来时，DMA 已经准备好接收请求。顺序反了，第一次转换可能已经完成但 DMA 还没使能，第一笔数据会丢失。
-
-### 7.16 主循环为什么只读变量
-
-主循环只判断：
-
-```c
-if (g_adc_value > 2048U)
-```
-
-这里没有 `EOC` 轮询，也没有读 `ADC1->DR`。这正是本课重点：CPU 的视角从“等待外设结果”变成“读取已经被 DMA 刷新的内存”。阈值 2048 对应 12 位 ADC 的中间值，约等于 VDDA 的一半。
+没有 EOC 轮询，没有读 DR。CPU 只读 `g_adc_value`——DMA 已经在后台持续刷新它。
 
 ## 8. HAL 版代码逐步讲解
 
-### 8.1 `HAL_Init()`
+### 8.1 已学步骤（快速过）
 
-`HAL_Init()` 准备 HAL 基础状态和 SysTick。它不配置 ADC，也不配置 DMA，但 HAL 延时、超时和部分状态机依赖它。
+1. `HAL_Init()` + 时钟 72MHz
+2. PC13 `GPIO_MODE_OUTPUT_PP`
+3. PA1 `GPIO_MODE_ANALOG`
+4. `__HAL_RCC_ADC1_CLK_ENABLE` + `RCC_ADCPCLK2_DIV6`
+5. `hadc1.Init`（单通道、连续转换、软件触发、右对齐）
+6. `HAL_ADCEx_Calibration_Start()`
+7. `sConfig`（Channel=1, Rank=1, SamplingTime=239.5）
 
-### 8.2 HAL 时钟配置
-
-`HAL_RCC_OscConfig()` 通过 `RCC_OscInitTypeDef` 选择 HSE、PLL 源和倍频；`HAL_RCC_ClockConfig()` 通过 `RCC_ClkInitTypeDef` 配置 SYSCLK、HCLK、PCLK1、PCLK2 和 Flash 延迟。
-
-这对应寄存器版的 `FLASH->ACR`、`RCC->CR`、`RCC->CFGR` 配置。
-
-### 8.3 HAL GPIO 配置
-
-PC13 使用 `GPIO_MODE_OUTPUT_PP`，对应 GPIO 推挽输出；PA1 使用 `GPIO_MODE_ANALOG`，对应 F1 中 `MODE1=00, CNF1=00`。
-
-HAL 结构体字段只是把寄存器位组合变成更可读的枚举。
-
-### 8.4 `hdma_adc1.Instance`
+### 8.2 新增：DMA 句柄配置
 
 ```c
-hdma_adc1.Instance = DMA1_Channel1;
+hdma_adc1.Instance = DMA1_Channel1;                              /* 硬件通道 */
+hdma_adc1.Init.Direction = DMA_PERIPH_TO_MEMORY;                 /* → DIR=0 */
+hdma_adc1.Init.PeriphInc = DMA_PINC_DISABLE;                     /* → PINC=0 */
+hdma_adc1.Init.MemInc = DMA_MINC_DISABLE;                        /* → MINC=0 */
+hdma_adc1.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;    /* → PSIZE=01 */
+hdma_adc1.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;       /* → MSIZE=01 */
+hdma_adc1.Init.Mode = DMA_CIRCULAR;                              /* → CIRC=1 */
+hdma_adc1.Init.Priority = DMA_PRIORITY_HIGH;                     /* → PL=10 */
 ```
 
-这句选择具体硬件通道。ADC1 的 DMA 请求映射到 DMA1_Channel1，所以 HAL 版也必须选它。选错通道时，HAL 初始化可能成功，但 ADC 请求不会触发正确通道搬运。
+每个字段对应 CCR 的一个位域。HAL 只是把寄存器位组合变成枚举，填错一样会写到底层寄存器。
 
-### 8.5 `Direction`
+### 8.3 新增：HAL_DMA_Init + LINKDMA
 
 ```c
-hdma_adc1.Init.Direction = DMA_PERIPH_TO_MEMORY;
+HAL_DMA_Init(&hdma_adc1);                        /* 写 CCR */
+__HAL_LINKDMA(&hadc1, DMA_Handle, hdma_adc1);   /* 关联句柄 */
 ```
 
-它对应寄存器版 `CCR.DIR = 0`。本课数据从 `ADC1->DR` 进入 RAM 变量，所以方向是外设到内存。
+`HAL_DMA_Init` 把上面字段写进 DMA 寄存器。`__HAL_LINKDMA` 让 ADC 句柄知道用哪个 DMA 通道。不关联则 `Start_DMA` 找不到通道。
 
-### 8.6 `PeriphInc` 和 `MemInc`
-
-`DMA_PINC_DISABLE` 对应 `PINC=0`，因为外设地址固定为 `ADC1->DR`。
-
-`DMA_MINC_DISABLE` 对应 `MINC=0`，因为内存目标固定为一个变量。本课不是数组采样，所以内存地址不自增。
-
-### 8.7 数据宽度字段
+### 8.4 新增：HAL_ADC_Start_DMA 一键启动
 
 ```c
-hdma_adc1.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
-hdma_adc1.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
+HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&g_adc_value, 1U);
 ```
 
-这对应 `PSIZE=01`、`MSIZE=01`。ADC 结果是 12 位，按 16 位半字搬运，和 `uint16_t`/低 16 位存储匹配。
+这一句等于寄存器版的：配 DMA 地址/计数 → 使能 DMA 通道 → 打开 CR2.DMA → SWSTART。参数地址或长度错，搬运目标就错。
 
-### 8.8 `Mode = DMA_CIRCULAR`
-
-`DMA_CIRCULAR` 对应 `CCR.CIRC=1`。ADC 连续转换时，DMA 必须循环接收结果。否则只会搬一次，变量不会持续刷新。
-
-### 8.9 `HAL_DMA_Init()`
-
-`HAL_DMA_Init(&hdma_adc1)` 根据上面字段写 DMA 通道配置寄存器。它做的是“准备 DMA 通道”，还不是启动 ADC+DMA。
-
-如果它返回错误，说明句柄或参数状态不对，本课进入 `error_handler()`。
-
-### 8.10 `__HAL_LINKDMA`
+### 8.5 主循环只读内存变量
 
 ```c
-__HAL_LINKDMA(&hadc1, DMA_Handle, hdma_adc1);
+if (g_adc_value > 2048U) {
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);  /* 亮 */
+} else {
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);    /* 灭 */
+}
 ```
 
-这句把 `hadc1.DMA_Handle` 指向 `hdma_adc1`。没有这个关联，`HAL_ADC_Start_DMA()` 只知道 ADC 句柄，不知道该操作哪个 DMA 通道。
+和寄存器版一样，CPU 不碰任何 ADC 寄存器。
 
-### 8.11 ADC 初始化字段
+## 9. 两个版本怎么学
 
-`hadc1.Instance = ADC1` 选择 ADC1。`ScanConvMode = ADC_SCAN_DISABLE` 表示单通道，不扫描多通道。`ContinuousConvMode = ENABLE` 对应 `CR2.CONT=1`。`ExternalTrigConv = ADC_SOFTWARE_START` 对应软件触发。`DataAlign = ADC_DATAALIGN_RIGHT` 表示右对齐。`NbrOfConversion = 1` 对应规则序列长度 1。
+寄存器版抓住 DMA 五要素 + 启动顺序：
 
-这些字段合起来描述“ADC1、单通道、软件启动、连续转换、一个规则转换”。
-
-### 8.12 ADC 校准和通道配置
-
-`HAL_ADCEx_Calibration_Start(&hadc1)` 对应寄存器版 `RSTCAL/CAL`。
-
-`HAL_ADC_ConfigChannel()` 中 `Channel = ADC_CHANNEL_1` 对应 PA1/ADC1_IN1，`Rank = ADC_REGULAR_RANK_1` 对应规则序列第一个位置，`SamplingTime = ADC_SAMPLETIME_239CYCLES_5` 对应较长采样时间。
-
-### 8.13 `HAL_ADC_Start_DMA`
-
-```c
-HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&g_adc_value, 1U)
+```text
+CPAR=&ADC1->DR + CMAR=&g_adc_value + CNDTR=1 + CCR(CIRC|PSIZE|MSIZE) + 先DMA后ADC
 ```
 
-第一个参数选择 ADC 句柄，第二个参数给 DMA 目标内存地址，第三个参数给传输长度。它内部会借助 `hadc1.DMA_Handle` 找到 DMA1_Channel1，启动 DMA，再启动 ADC。
+HAL 版抓住三个关键动作：
 
-本课长度是 1，所以效果和寄存器版 `CNDTR=1, CMAR=&g_adc_value` 对齐。
+```text
+DMA_HandleTypeDef 配置 → __HAL_LINKDMA 关联 → HAL_ADC_Start_DMA 一键启动
+```
 
-## 9. 两个版本真正应该怎么学
-
-寄存器版让你看到每个硬件开关：DMA 时钟、通道关闭、地址、计数、方向、宽度、循环、ADC DMA 请求、ADC 软件启动。
-
-HAL 版让你看到工程表达：句柄选择实例，结构体字段描述硬件行为，`HAL_DMA_Init()` 写配置，`__HAL_LINKDMA()` 建立外设和 DMA 的关系，`HAL_ADC_Start_DMA()` 启动整条链路。
-
-学这课时不要背 API。先画出“ADC1->DR 到 g_adc_value”的搬运路径，再把每个寄存器位和 HAL 字段放回路径上。
+共同要点：**ADC 负责"产生数据"，DMA 负责"搬数据"，CPU 负责"消费已经在内存里的数据"。三者各司其职。**
 
 ## 10. 检验问题清单
 
-### 10.1 为什么 ADC1 使用 `DMA1_Channel1`
+### 10.1 为什么 ADC1 固定用 DMA1_Channel1？
 
-因为 STM32F103 内部的 DMA 请求映射是固定的，ADC1 的 DMA 请求连接到 DMA1_Channel1。软件不能随便把 ADC1 请求改接到别的普通通道。
+**答**：F103 芯片内部硬连线映射，不是软件可选的。查参考手册 DMA 请求映射表可确认。
 
-### 10.2 `CPAR` 和 `CMAR` 分别保存什么
+### 10.2 `CIRC=1` 不开会怎样？
 
-`CPAR` 保存外设端地址，本课是 `&ADC1->DR`。`CMAR` 保存内存端地址，本课是 `&g_adc_value`。
+**答**：DMA 搬一次就停，`g_adc_value` 只更新第一次，之后电位器怎么转都不变。
 
-### 10.3 为什么本课 `CNDTR` 是 1
+### 10.3 `CR2.DMA` 位不设会怎样？
 
-因为本课只保存最新一个 ADC 采样结果，不保存数组。循环模式会让这个长度为 1 的搬运反复发生。
+**答**：ADC 不会向 DMA 发请求，DMA 通道配得再对也收不到触发，`g_adc_value` 不更新。
 
-### 10.4 为什么要打开 `ADC_CR2_DMA`
+### 10.4 启动顺序反了会怎样？
 
-因为 DMA 搬运需要 ADC 发请求触发。不开这个位，ADC 即使转换完成，也不会通知 DMA 读取 `DR`。
+**答**：先 SWSTART 再开 DMA，第一笔 ADC 数据出来时 DMA 还没使能，会丢失。
 
-### 10.5 为什么要打开 `ADC_CR2_CONT`
+### 10.5 误开 `MINC` 会怎样？
 
-因为本课希望 ADC 持续采样。不开连续转换时，ADC 只响应一次软件启动，DMA 也只能搬一次。
+**答**：DMA 第一次写 `g_adc_value`，后续写到后续地址，变量只变一次，还可能破坏别的内存。
 
-### 10.6 为什么 `g_adc_value` 要加 `volatile`
+### 10.6 `__HAL_LINKDMA` 不写会怎样？
 
-因为它会被 DMA 硬件在 C 代码执行流之外修改。`volatile` 防止编译器把主循环中的读取优化成旧值。
+**答**：`HAL_ADC_Start_DMA()` 找不到 DMA 通道，返回错误。
 
-### 10.7 HAL 版里 `__HAL_LINKDMA` 少了会怎样
+### 10.7 `volatile` 去掉会怎样？
 
-ADC 句柄找不到对应 DMA 句柄，`HAL_ADC_Start_DMA()` 无法正确操作 DMA 通道，常见结果是启动失败或变量不更新。
+**答**：编译器可能把 `g_adc_value` 缓存在寄存器，主循环读不到 DMA 写的最新值。DMA 场景下比中断场景更严重，因为 DMA 写内存的频率更高。
 
-### 10.8 如果 LED 不随电位器变化，先查哪几层
+### 10.8 `CPAR` 写成 `ADC1->DR` 的值而不是地址会怎样？
 
-先查 PA1 是否接入 0 到 3.3V 模拟电压，再查 GPIOA 模拟模式、ADC 通道是否为 1、`CR2.DMA/CONT` 是否打开、DMA1_Channel1 的 `CPAR/CMAR/CNDTR/CCR` 是否正确，最后查主循环阈值和 PC13 低电平点亮逻辑。
+**答**：DMA 把那个值当地址去读，读到的数据完全随机，`g_adc_value` 不反映 ADC 结果。
 
 ## 11. 工程实现步骤
 
 ### 11.1 需求分析
 
-本课需求是让 ADC1 连续采样 PA1，并用 DMA 把每次转换结果自动写进一个变量。CPU 不轮询 `EOC`，不进入 ADC 中断，不手动读取 `ADC1->DR`。
+让 ADC1 连续采样 PA1，DMA 自动把结果搬到内存变量，CPU 只读变量控制 LED。要求 DMA 通道映射正确、搬运路径正确、循环模式开启、ADC 侧 DMA 请求使能、启动顺序正确。
 
 ### 11.2 硬件核查
 
-确认板卡是 STM32F103C8T6 BluePill，PA1 接模拟电压，电压范围不超过 3.3V，PC13 LED 可用。若用电位器，电位器两端接 3.3V/GND，中间端接 PA1。
+电位器中间脚接 PA1，两端接 3.3V/GND，输入不超过 3.3V，共地。
 
 ### 11.3 寄存器路线
 
-进入 `18_dma_basic/reg`，先读 `system_clock_72mhz_init()`、`led_pc13_init()`、`pa1_adc_input_init()`，再读 `dma1_channel1_init()` 和 `adc1_init()`。重点确认 `CPAR=&ADC1->DR`、`CMAR=&g_adc_value`、`CNDTR=1`、`CIRC=1`、`ADC_CR2_DMA`、`ADC_CR2_CONT`。
-
-编译命令：
-
-```sh
-pio run
-```
-
-下载命令：
-
-```sh
-pio run -t upload
-```
+1. 时钟 72MHz、PC13 输出、PA1 模拟输入（同前课）
+2. ADC1 时钟/分频/规则组/采样时间/校准（同前课）
+3. `RCC->AHBENR |= DMA1EN`（注意是 AHB 不是 APB2）
+4. 关 DMA 通道 → 配 CNDTR/CPAR/CMAR/CCR
+5. `CR2.CONT=1 + CR2.DMA=1`
+6. 先 `CCR.EN=1` → 再 `SWSTART`
 
 ### 11.4 HAL 路线
 
-进入 `18_dma_basic/hal`，重点读 `dma1_channel1_init()`、`adc1_init()` 和 `HAL_ADC_Start_DMA()`。把 `DMA_HandleTypeDef.Init` 字段逐个对应到 DMA `CCR`，把 ADC 初始化字段对应到 ADC `CR2/SQR/SMPR`。
+1. HAL_Init + 时钟/PC13/PA1 ANALOG（同前课）
+2. `__HAL_RCC_DMA1_CLK_ENABLE()`
+3. `hdma_adc1.Init` 配方向/自增/宽度/循环/优先级
+4. `HAL_DMA_Init()` + `__HAL_LINKDMA()`
+5. `hadc1.Init.ContinuousConvMode = ENABLE`
+6. `HAL_ADC_Start_DMA(&hadc1, &g_adc_value, 1)`
 
 ### 11.5 工程思维
 
-DMA 调试时不要只盯 CPU 代码。要同时看三件事：外设有没有产生请求，DMA 通道有没有响应请求，内存目标是否正确。ADC+DMA 的本质是两个硬件模块之间协作，CPU 只是配置者和结果消费者。
+DMA 的本质是"让硬件代替 CPU 做搬运"。ADC+DMA 是 STM32 中最经典的组合之一：ADC 不断产生数据，DMA 不断搬走，CPU 完全解放。后续多通道扫描+DMA 更是标配——CPU 手动读多个通道容易漏，DMA 按顺序搬到数组不会错。
 
 ### 11.6 常见工程陷阱
 
-DMA 通道选错、忘记开 `ADC_CR2_DMA`、忘记循环模式、目标变量没加 `volatile`、宽度设置不匹配、启动顺序反了，都会让程序看起来“能跑但数据不动”。这类问题要按数据路径逐层排查。
+1. **DMA 时钟没开** — 写在 APB2ENR 而不是 AHBENR
+2. **CIRC 没开** — 变量只更新一次
+3. **CR2.DMA 没设** — ADC 不发请求
+4. **启动顺序反** — 第一笔数据丢失
+5. **MINC 误开** — 写坏相邻内存
+6. **__HAL_LINKDMA 漏写** — Start_DMA 返回错误
+7. **volatile 漏写** — 主循环读不到最新值
 
 ## 12. 运行现象
 
-正常情况下，PA1 电压低于约 VDDA/2 时，`g_adc_value` 小于 2048，PC13 保持熄灭；PA1 电压高于约 VDDA/2 时，`g_adc_value` 大于 2048，PC13 点亮。
+电位器中间脚接 PA1，旋转电位器时：
 
-用调试器观察 `g_adc_value`，它应该在不暂停 CPU 的情况下持续被 DMA 更新。主循环里看不到读 `ADC1->DR` 的语句，这是本课正确现象的一部分。
+- **电位器旋到 GND 端**：`g_adc_value` 接近 0，PC13 LED **灭**
+- **电位器旋到中间**：`g_adc_value` 约 2048（对应 ~1.65V），PC13 LED **在此阈值切换**
+- **电位器旋到 3.3V 端**：`g_adc_value` 接近 4095，PC13 LED **亮**
+
+**关键区别于前课**：主循环里没有任何 `while(!EOC)` 轮询、没有读 `ADC1->DR`、没有中断回调。CPU 只执行 `if (g_adc_value > 2048)` 这一行判断。用调试器观察 `g_adc_value`，旋转电位器时应看到 0~4095 平滑变化，更新频率约 40kHz（12MHz ADC 时钟 / 252 转换周期），远快于轮询或中断方式。
+
+如果 `g_adc_value` 始终为 0：检查 DMA 时钟（AHBENR）、CPAR/CMAR 地址、CIRC 模式、CR2.DMA 位。如果只更新一次就不变了：CIRC 没开。
 
 ## 13. 常见问题排查
 
-### 13.1 `g_adc_value` 一直是 0
+### 13.1 g_adc_value 始终为 0
 
-先查 PA1 是否真的有电压，再查 GPIOA 时钟和 PA1 模拟模式。然后查 ADC1 时钟、通道号是否为 `ADC_CHANNEL_1` 或 `SQR3=1`。最后查 DMA 是否使能、`ADC_CR2_DMA` 是否打开。
+按层排查：DMA 时钟开了没（AHBENR）→ CPAR 指向 &ADC1->DR 了没 → CCR.EN 使能了没 → CR2.DMA 设了没 → SWSTART 启动了没。
 
-### 13.2 `g_adc_value` 只变化一次
+### 13.2 g_adc_value 只更新一次
 
-重点查 `DMA_CCR_CIRC` 和 `ADC_CR2_CONT`。少了循环模式，DMA 一轮结束后停止；少了连续转换，ADC 只产生一次结果。
+CIRC 没开。DMA 搬一次就停了，后续 ADC 数据没人搬。
 
-### 13.3 数值变化但 LED 逻辑反了
+### 13.3 g_adc_value 值随机或异常
 
-BluePill PC13 LED 通常低电平点亮。寄存器版写 `BRR` 是拉低点亮，写 `BSRR` 是拉高熄灭。先确认板子 LED 极性，再看阈值判断分支。
+CPAR 写成了 DR 的值而不是地址，或 PSIZE/MSIZE 不匹配。检查 `CPAR = (uint32_t)&ADC1->DR` 是否取了地址。
 
-### 13.4 数值异常跳动
+### 13.4 HAL 版 Start_DMA 返回错误
 
-检查 PA1 输入是否悬空，电位器 GND 是否和开发板共地，VDDA 是否稳定。再检查采样时间是否足够，ADC 时钟是否为 PCLK2/6 附近。
+检查 `__HAL_LINKDMA` 是否写了，`hdma_adc1.Instance` 是否是 `DMA1_Channel1`。
 
-### 13.5 HAL 版启动后不更新或程序异常
+### 13.5 主循环读不到最新值
 
-检查 `__HAL_LINKDMA()` 是否在 `HAL_ADC_Start_DMA()` 前执行，`hdma_adc1.Instance` 是否为 `DMA1_Channel1`，`HAL_ADC_Start_DMA()` 的目标地址和长度是否正确。
+`volatile` 漏了。编译器优化后把变量缓存在寄存器，DMA 写了内存但 C 代码读的是旧值。
 
-如果还出现跑飞或其他变量异常，继续查 `CMAR` 目标地址、`CNDTR` 长度、`MSIZE` 和内存变量类型是否匹配。DMA 写错地址会直接破坏 RAM，不一定表现为清晰错误。
+## 14. 本课结论
 
-## 14. 本课最核心的结论
+1. DMA 是硬件搬运工，把数据从外设寄存器搬到内存，CPU 不参与
+2. F103 中 ADC1 固定映射到 DMA1_Channel1
+3. DMA 五要素：CPAR（源）、CMAR（目标）、CNDTR（数量）、CCR（行为）、EN（使能）
+4. `CIRC=1` 让 DMA 循环搬运，配合 ADC 连续转换持续工作
+5. `CR2.DMA=1` 是 ADC 和 DMA 的握手开关，不设则 ADC 不发请求
+6. 启动顺序：先使能 DMA → 再启动 ADC，否则第一笔数据丢失
+7. HAL 的 `__HAL_LINKDMA` 关联句柄，`HAL_ADC_Start_DMA` 一键启动
 
-1. ADC+DMA 的核心不是“多一个库函数”，而是把 ADC 数据读取者从 CPU 换成 DMA 硬件。
-2. `ADC_CR2_CONT` 让 ADC 持续产生数据，`ADC_CR2_DMA` 让 ADC 完成转换后请求 DMA 搬运。
-3. `CPAR` 决定从哪里读，`CMAR` 决定写到哪里，`CNDTR` 决定搬多少，`CCR` 决定怎么搬。
-4. STM32F103 的 ADC1 DMA 请求固定映射到 `DMA1_Channel1`，通道选择不是随便写的。
-5. 单变量接收时不打开内存自增；数组接收时才需要考虑 `MINC`。
-6. HAL 版的 `HAL_ADC_Start_DMA()` 依赖 `__HAL_LINKDMA()` 建立 ADC 句柄和 DMA 句柄的关系。
-7. 排查 ADC+DMA 时要沿着“模拟输入 -> ADC 转换 -> DMA 请求 -> DMA 通道 -> RAM 变量 -> LED 判断”逐层看。
+## 15. 阅读建议
 
-## 15. 建议你现在怎么读这节课
+先看寄存器版 `dma1_channel1_init()`，理解 DMA 五要素怎么配。再看 `adc1_init()` 里的 `CONT+DMA` 两行，理解 ADC 侧怎么发请求。最后看 `adc1_dma_start()` 的启动顺序。
 
-第一遍先看第 5 章脑图，确认 ADC 和 DMA 分工。第二遍读寄存器版 `dma1_channel1_init()`，把 `CPAR/CMAR/CNDTR/CCR` 写在纸上。第三遍读 HAL 版，把每个 `hdma_adc1.Init` 字段对应回 DMA 寄存器。第四遍上板观察 `g_adc_value`，故意关掉 `CIRC` 或 `CONT` 看现象如何变化。
+HAL 版重点看 `hdma_adc1.Init` 每个字段对应哪个 CCR 位，以及 `__HAL_LINKDMA` 为什么不是装饰代码。
 
 ## 16. 扩展练习
 
-- 把阈值 `2048U` 改成 `1024U` 或 `3072U`，观察 LED 翻转点。
-- 去掉 `DMA_CCR_CIRC`，观察变量是否只更新一次。
-- 把 `MINC` 打开，观察单变量接收为什么会出问题。
-- 把 HAL 版 `DMA_CIRCULAR` 改成 `DMA_NORMAL`，对照寄存器版现象。
-- 用调试器同时观察 `ADC1->DR` 和 `g_adc_value`。
+1. 把 `CIRC` 去掉，观察 `g_adc_value` 是否只更新一次
+2. 误开 `MINC`，观察变量和相邻内存的变化
+3. 把启动顺序反过来（先 SWSTART 再开 DMA），观察第一笔数据是否丢失
+4. 把 `CPAR` 改成 `ADC1->DR` 的值而不是地址，观察结果
+5. 思考：如果 DMA 搬到数组而不是单个变量，`CNDTR` 和 `MINC` 怎么改？
 
 ## 17. 下一课预告
 
 上一课：[17_adc_multichannel_scan](../17_adc_multichannel_scan/README.md)
 
 下一课：[19_dma_memory_uart_cases](../19_dma_memory_uart_cases/README.md)
+
+下一课学习 DMA 的更多使用场景：内存到内存搬运、内存到 UART 发送等，扩展对 DMA 方向和触发源的理解。

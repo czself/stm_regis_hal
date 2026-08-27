@@ -27,7 +27,7 @@ int main(void)
 static void system_clock_72mhz_init(void)
 {
     RCC_OscInitTypeDef osc = {0};
-    RCC_ClkInitTypeDef clk = {0};
+    RCC_ClkInitTypeDef clk = {0}; 
 
     /* 选择外部 HSE，并用 PLL x9 得到常用 72MHz 系统时钟。 */
     osc.OscillatorType = RCC_OSCILLATORTYPE_HSE;

@@ -77,7 +77,10 @@ static void i2c1_init(void)
     RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
 
     /*
-     * PB6/PB7 是 I2C1 的 SCL/SDA，必须使用复用开漏输出。
+     * PB6/PB7 是 I2C1 的 SCL/SDA，必须配成复用开漏（CNF=11）。
+     * 开漏模式下写 1 = 释放（上拉拉高），写 0 = 拉低。
+     * 如果错配成推挽，多个设备同时输出相反电平会短路。
+     * 先清零再设置：防止 CRL 中其他引脚（PB0~PB5）的配置被误改。
      */
     GPIOB->CRL &= ~(GPIO_CRL_MODE6 |
                     GPIO_CRL_CNF6 |
@@ -87,6 +90,14 @@ static void i2c1_init(void)
     GPIOB->CRL |= GPIO_CRL_MODE6 | GPIO_CRL_CNF6;
     GPIOB->CRL |= GPIO_CRL_MODE7 | GPIO_CRL_CNF7;
 
+    /*
+     * I2C1 时序配置：
+     *   SWRST -> 软件复位，清除之前可能残留的状态
+     *   CR2=36  -> PCLK1=36MHz，告诉 I2C1 内部时钟频率
+     *   CCR=180 -> SCL=36MHz/(2*180)=100kHz（标准模式）
+     *   TRISE=37 -> 最大上升时间 = (36MHz)+1 个 PCLK1 周期
+     *   PE=1     -> 打开 I2C1 外设
+     */
     I2C1->CR1 = I2C_CR1_SWRST;
     I2C1->CR1 = 0U;
 

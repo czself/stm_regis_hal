@@ -255,7 +255,7 @@ static void process_bitmap_frame(const uint8_t *data)
  *
  * 使用 SPI1 硬件：一次 SPI 发送 3 个字节
  *---------------------------------------------------------------------------*/
-static void lcd_write_byte(uint8_t data, uint8_t is_cmd)
+static void lcd_write_byte(uint8_t data, uint8_t is_data)
 {
     uint8_t buf[3];
 
@@ -268,8 +268,10 @@ static void lcd_write_byte(uint8_t data, uint8_t is_cmd)
      * ST7920 同步字节:
      *   LCD_CMD_SYNC  (0xF8): RS=0, RW=0 → 写指令
      *   LCD_DATA_SYNC (0xFA): RS=1, RW=0 → 写数据
+     *
+     * is_data = 0 → 写指令 (CMD_SYNC)；is_data = 1 → 写数据 (DATA_SYNC)。
      */
-    buf[0] = is_cmd ? LCD_DATA_SYNC : LCD_CMD_SYNC;
+    buf[0] = is_data ? LCD_DATA_SYNC : LCD_CMD_SYNC;
 
     /*
      * ST7920 要求每个半字节前面有 5 个高电平 + RW + RS + 0
@@ -291,12 +293,12 @@ static void lcd_write_byte(uint8_t data, uint8_t is_cmd)
 
 static void lcd_write_cmd(uint8_t cmd)
 {
-    lcd_write_byte(cmd, 0U);  /* is_cmd = 0 */
+    lcd_write_byte(cmd, 0U);  /* is_data = 0 → 写指令 */
 }
 
 static void lcd_write_data(uint8_t data)
 {
-    lcd_write_byte(data, 1U);  /* is_cmd = 1 */
+    lcd_write_byte(data, 1U);  /* is_data = 1 → 写数据 */
 }
 
 /*---------------------------------------------------------------------------*

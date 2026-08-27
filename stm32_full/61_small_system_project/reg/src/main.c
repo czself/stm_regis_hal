@@ -2,6 +2,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "semphr.h"
 
 /*
  * 寄存器版：FreeRTOS 小系统综合项目。
@@ -14,6 +15,9 @@
  * - uart_task 解析 t/s 命令
  * - control_task 统一处理控制事件
  * - status_task 做低优先级周期状态输出
+ *
+ * 多个任务都会调用 uart_write_str/uart_write_u16 往串口输出，因此用一把
+ * 互斥锁 g_uart_mutex 保护 UART 发送，避免多任务并发时字节交错。
  */
 
 enum {
@@ -23,6 +27,7 @@ enum {
 
 static QueueHandle_t g_event_queue;
 static QueueHandle_t g_uart_queue;
+static SemaphoreHandle_t g_uart_mutex;
 static volatile uint16_t g_adc_value;
 
 static void stop_for_debug(void)
@@ -157,10 +162,20 @@ static void uart_write_byte(uint8_t byte)
 
 static void uart_write_str(const char *s)
 {
+    /*
+     * 多个任务可能同时调用本函数；用互斥锁保证一次完整字符串不会被
+     * 其他任务的发送打断，避免串口输出出现字节交错。
+     */
+    if (xSemaphoreTake(g_uart_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+
     while (*s != '\0') {
         uart_write_byte((uint8_t)*s);
         s++;
     }
+
+    (void)xSemaphoreGive(g_uart_mutex);
 }
 
 static void uart_write_u16(uint16_t value)
@@ -168,8 +183,13 @@ static void uart_write_u16(uint16_t value)
     char buf[6];
     int i = 0;
 
+    if (xSemaphoreTake(g_uart_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+
     if (value == 0U) {
         uart_write_byte('0');
+        (void)xSemaphoreGive(g_uart_mutex);
         return;
     }
 
@@ -183,6 +203,8 @@ static void uart_write_u16(uint16_t value)
         i--;
         uart_write_byte((uint8_t)buf[i]);
     }
+
+    (void)xSemaphoreGive(g_uart_mutex);
 }
 
 static void adc_task(void *argument)
@@ -309,6 +331,7 @@ int main(void)
 
     g_event_queue = xQueueCreate(8, sizeof(uint8_t));
     g_uart_queue = xQueueCreate(32, sizeof(uint8_t));
+    g_uart_mutex = xSemaphoreCreateMutex();
 
     BaseType_t adc_ok = xTaskCreate(adc_task, "adc", 128, NULL, 2, NULL);
     BaseType_t key_ok = xTaskCreate(key_task, "key", 128, NULL, 2, NULL);
@@ -318,6 +341,7 @@ int main(void)
 
     if ((g_event_queue == NULL) ||
         (g_uart_queue == NULL) ||
+        (g_uart_mutex == NULL) ||
         (adc_ok != pdPASS) ||
         (key_ok != pdPASS) ||
         (control_ok != pdPASS) ||

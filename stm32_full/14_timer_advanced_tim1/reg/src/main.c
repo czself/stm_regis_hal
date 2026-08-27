@@ -76,8 +76,7 @@ static void pa8_tim1_ch1_pin_init(void)
     RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_AFIOEN;
 
     GPIOA->CRH &= ~(GPIO_CRH_MODE8 | GPIO_CRH_CNF8);
-    GPIOA->CRH |= GPIO_CRH_MODE8_1;
-    GPIOA->CRH |= GPIO_CRH_CNF8_1;
+    GPIOA->CRH |= GPIO_CRH_MODE8_1 | GPIO_CRH_CNF8_1;
 }
 
 static void tim1_ch1_pwm_init(void)
@@ -101,9 +100,7 @@ static void tim1_ch1_pwm_init(void)
      * OC1PE = 1：开启比较值预装载，让 CCR1 更新更稳。
      */
     TIM1->CCMR1 &= ~(TIM_CCMR1_CC1S | TIM_CCMR1_OC1M);
-    TIM1->CCMR1 |= TIM_CCMR1_OC1M_1;
-    TIM1->CCMR1 |= TIM_CCMR1_OC1M_2;
-    TIM1->CCMR1 |= TIM_CCMR1_OC1PE;
+    TIM1->CCMR1 |= TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1PE;
 
     /*
      * CC1E 只打开通道 1 输出路径。

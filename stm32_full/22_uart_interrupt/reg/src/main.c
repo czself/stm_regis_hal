@@ -254,7 +254,7 @@ static void led_toggle(void)
 void USART1_IRQHandler(void)
 {
     /*
-     * 确认本次中断确实验证是因为 RXNE 置位
+     * 确认本次中断确实是因为 RXNE 置位
      *
      * USART1 的中断可能由多个来源触发：
      *   RXNE：收到新数据 ← 本课关注的

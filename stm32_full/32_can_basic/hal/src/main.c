@@ -42,6 +42,11 @@ static void error_handler(void);
  *   4. HAL_CAN_GetRxFifoFillLevel() — 检查 FIFO0
  *   5. HAL_CAN_GetRxMessage() — 从 FIFO0 取回
  *   6. 校验 ID/DLC/数据 → 控制 LED
+ *
+ * 注意：如果连续收到 FIFO 满（HAL_CAN_AddTxMessage 成功但
+ * HAL_CAN_GetRxFifoFillLevel 一直为 0），先检查过滤器是否激活、
+ * 是否分配到 FIFO0、模式是否为 LOOPBACK。内部回环最常出错的
+ * 不是物理连线而是配置遗漏。
  */
 int main(void)
 {
@@ -250,6 +255,11 @@ static void can_gpio_init(void)
  * 位时序计算：
  *   tq 总数 = 1 + 13 + 4 = 18
  *   CAN 速率 = 36MHz / (4 × 18) = 500kbps
+ *
+ * Prescaler 填 0 会导致分频比为 1，CAN 速率变为 36MHz / 18 = 2Mbps，
+ * 远超出 F103 bxCAN 最大 1Mbps 规格，通信不可靠。
+ * TimeSeg1/TimeSeg2 分配不均（如 TS1 太小 TS2 太大）会导致采样点
+ * 位置偏差，真实总线上会因位同步错误产生 CRC 校验失败。
  */
 static void can1_init(void)
 {
@@ -287,6 +297,11 @@ static void can1_init(void)
  * FilterActivation = ENABLE → FA1R.FACT0 = 1（激活）
  *
  * 全 0 掩码 = 任何 ID 都放行。
+ *
+ * 如果 FilterActivation 不设为 ENABLE，过滤器不工作，
+ * 所有报文（包括回环报文）都不会进入 FIFO0。
+ * 此时 HAL_CAN_GetRxFifoFillLevel 永远返回 0，
+ * 主循环会卡在 while 等待中。
  */
 static void can1_filter_init(void)
 {

@@ -115,7 +115,7 @@ static void wwdg_init(void)
      * W = 0x50 表示窗口值：
      *   只有当 T 在 0x41 ~ 0x50 之间时刷新才合法
      *   T 从 0x7F 开始递减，刚启动时 T > 0x50，此时刷新会导致复位
-     *   T 递减到 0x4F 以下时（<0x40），也快超时了（0x3F 以下会复位）
+     *   T 递减到 0x40 以下时（即 ≤0x3F），就会超时复位
      */
     WWDG->CFR = WWDG_CFR_WDGTB | WWDG_WINDOW_VALUE;
 

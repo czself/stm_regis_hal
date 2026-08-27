@@ -271,7 +271,7 @@ FreeRTOS 的时间 API 用 `TickType_t` 和内核内部比较逻辑处理 tick �
 
 ### 7.16 如何用断点判断相对延时
 
-在 relative 任务的 `HAL_GPIO_TogglePin()` 或 `led_toggle_pa1()` 后打断点，再继续运行到下一次命中。
+在 relative 任务的 `led_toggle_pa1()` 后打断点，再继续运行到下一次命中。
 
 两次命中之间包含任务执行时间和 700ms 阻塞时间。若你在任务里增加耗时代码，间隔会随之增加。这能直观看出相对延时不是固定“边沿到边沿绝对周期”。
 
@@ -315,7 +315,7 @@ HAL 版 relative 翻转 PA1 后调用 `vTaskDelay(700ms)`。
 
 ### 8.7 HAL 版创建结果
 
-两个任务创建结果用 `ok` 汇总。失败就停住。
+两个任务创建结果分别存入 `precise_ok` 和 `relative_ok`，任一失败就停住。
 
 HAL 不能掩盖 FreeRTOS heap 或栈不足，排错仍要看 hook 和返回值。
 

@@ -92,139 +92,59 @@ HAL/工程层：HAL 版用 `TIM_HandleTypeDef` 描述 TIM1，用 `TIM_OC_InitTyp
 
 ## 6. 核心名词解释
 
-### 6.1 `TIM1` 是什么
+### 6.1 已学名词速查
+
+以下名词在 06-08 课已详细讲过，本课不再重复解释：
+
+| 名词 | 一句话提醒 |
+|------|-----------|
+| `PSC` | 预分频器，本课 `72-1` → 1MHz 计数频率 |
+| `ARR` | 自动重装载，本课 `1000-1` → 1kHz PWM |
+| `CCR1` | 比较值，本课 `300` → 约 30% 占空比 |
+| `OC1M` | 输出比较模式，本课 `110` = PWM mode 1 |
+| `OC1PE` | 比较值预装载使能 |
+| `CC1E` | 通道 1 输出使能 |
+| 复用推挽输出 | PA8 交给 TIM1_CH1 驱动，不是普通 GPIO |
+
+本课新增重点在下面。
+
+### 6.2 `TIM1` 是什么
 
 `TIM1` 是 STM32F103 的高级控制定时器。
 
-它属于 STM32 片上高级 TIM 外设层。它能做普通 PWM，也支持互补输出、死区时间、刹车输入、重复计数器和主输出使能。
+它能做普通 PWM，也支持互补输出、死区时间、刹车输入、重复计数器和主输出使能。
 
 本课用 TIM1_CH1 输出 PWM，重点观察它比 TIM2/TIM3 多出的 `BDTR.MOE`。
 
 如果把 TIM1 当普通定时器，只配到 `CC1E` 就停手，PA8 可能没有波形。
 
-### 6.2 高级定时器是什么
+### 6.3 高级定时器是什么
 
 高级定时器是面向电机控制、功率驱动等场景的定时器。
 
-它属于定时器功能分级层。相较普通定时器，高级定时器多了主输出控制、互补输出、死区、刹车、重复计数器等功能。
+相较普通定时器，高级定时器多了主输出控制、互补输出、死区、刹车、重复计数器等功能。
 
 这些功能的目的不是让点灯更复杂，而是让半桥、全桥、电机驱动更安全。
 
 本课只引入最关键的主输出使能，不展开互补输出和刹车应用。
 
-### 6.3 `PA8` 是什么
+### 6.4 `PA8` 是什么
 
-PA8 是 GPIOA 的 8 号引脚。
+PA8 是 TIM1_CH1 的默认复用输出脚。
 
-它属于物理引脚层和复用输出层。本课中 PA8 是 TIM1_CH1 的默认复用输出脚。
+PA8 属于 `GPIOA->CRH`（8~15 号引脚在 CRH）。如果测错引脚（比如去看 PA0），就不会看到 TIM1_CH1 的 PWM。
 
-寄存器版在 `GPIOA->CRH` 中配置 PA8，因为 8 到 15 号引脚属于 CRH。HAL 版使用 `GPIO_PIN_8` 和 `GPIO_MODE_AF_PP`。
-
-如果测错引脚，比如去看 PA0，就不会看到 TIM1_CH1 的 PWM。
-
-### 6.4 复用推挽输出是什么
-
-复用推挽输出表示引脚输出由片上外设驱动，驱动方式是推挽。
-
-它属于 GPIO 模式层。本课 PA8 要输出 TIM1_CH1，所以不能配置成普通 GPIO 输出。
-
-寄存器版：
-
-```c
-GPIOA->CRH |= GPIO_CRH_MODE8_1 | GPIO_CRH_CNF8_1;
-```
-
-`MODE8=10` 表示输出速度配置，`CNF8=10` 表示复用推挽。
-
-### 6.5 `PSC` 是什么
-
-`PSC` 是 Prescaler，中文叫预分频器。
-
-它属于 TIM1 时基层。本课：
-
-```c
-TIM1->PSC = 72U - 1U;
-```
-
-TIM1 挂在 APB2，APB2 不分频，TIM1 输入按 72MHz 计算。除以 72 后，计数频率是 1MHz。
-
-如果 `PSC` 写错，PWM 频率会整体改变。
-
-### 6.6 `ARR` 是什么
-
-`ARR` 是 Auto-Reload Register，中文叫自动重装载寄存器。
-
-它属于 PWM 周期层。本课：
-
-```c
-TIM1->ARR = 1000U - 1U;
-```
-
-`ARR=999` 表示 1000 个 1MHz tick 形成一个周期，PWM 频率是 1kHz。
-
-### 6.7 `CCR1` 是什么
-
-`CCR1` 是 Capture/Compare Register 1。
-
-它属于 TIM1_CH1 比较值层。在 PWM 输出中，`CCR1` 决定有效电平持续时间。
-
-本课：
-
-```c
-TIM1->CCR1 = 300U;
-```
-
-`ARR+1=1000`，所以占空比约 `300/1000 = 30%`。
-
-### 6.8 `OC1M` 是什么
-
-`OC1M` 是 Output Compare 1 Mode，中文叫输出比较 1 模式。
-
-它属于 `CCMR1` 中的通道输出模式字段。本课设置 `OC1M=110`，也就是 PWM mode 1。
-
-寄存器版：
-
-```c
-TIM1->CCMR1 = TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1PE;
-```
-
-如果不是 PWM mode 1，PA8 的输出不会按 `CCR1` 形成预期占空比。
-
-### 6.9 `OC1PE` 是什么
-
-`OC1PE` 是 Output Compare 1 Preload Enable。
-
-它属于比较值预装载层。打开后，`CCR1` 新值可以在更新事件同步生效，避免周期中间突然改变输出规则。
-
-本课虽然没有动态改占空比，但保留 `OC1PE` 是 PWM 配置的常见习惯。
-
-### 6.10 `CCER.CC1E` 是什么
-
-`CC1E` 是 Capture/Compare 1 Output Enable，中文叫通道 1 输出使能。
-
-它属于通道输出开关层。本课：
-
-```c
-TIM1->CCER = TIM_CCER_CC1E;
-```
-
-它打开 TIM1_CH1 通道输出。对普通定时器，这一步通常已经足以把通道输出送到复用脚；但 TIM1 还需要 `MOE`。
-
-### 6.11 `BDTR` 是什么
+### 6.5 `BDTR` 是什么
 
 `BDTR` 是 Break and Dead-Time Register，中文叫刹车与死区时间寄存器。
 
-它属于高级定时器安全输出层。TIM1/TIM8 的刹车、死区、主输出使能等都在这里。
+TIM1/TIM8 的刹车、死区、主输出使能等都在这里。HAL 版用 `TIM_BreakDeadTimeConfigTypeDef` 和 `HAL_TIMEx_ConfigBreakDeadTime()` 配置这个寄存器。
 
-本课最关键的是 `BDTR.MOE`。HAL 版用 `TIM_BreakDeadTimeConfigTypeDef` 和 `HAL_TIMEx_ConfigBreakDeadTime()` 配置这个寄存器相关功能。
-
-### 6.12 `MOE` 是什么
+### 6.6 `MOE` 是什么
 
 `MOE` 是 Main Output Enable，中文叫主输出使能。
 
-它属于高级定时器总输出门控层。TIM1 的 PWM 内部生成后，还必须经过 `MOE` 这道总闸，才能真正输出到 PA8。
-
-寄存器版：
+TIM1 的 PWM 内部生成后，还必须经过 `MOE` 这道总闸，才能真正输出到 PA8。
 
 ```c
 TIM1->BDTR = TIM_BDTR_MOE;
@@ -232,130 +152,60 @@ TIM1->BDTR = TIM_BDTR_MOE;
 
 如果 `MOE=0`，TIM1 内部计数和比较可能都正常，但 PA8 没有 PWM。
 
-### 6.13 `DeadTime` 是什么
+**这是本课最关键的新知识点。**
 
-`DeadTime` 是死区时间。
+### 6.7 `CC1E` vs `MOE`
 
-它属于功率驱动保护层。半桥驱动中，上管和下管不能同时导通，否则会短路。死区时间用于在互补输出切换时插入一小段双方都关断的时间。
+| | `CC1E` | `MOE` |
+|--|--------|-------|
+| 全称 | 通道 1 输出使能 | 主输出使能 |
+| 作用 | 打开通道 1 的门 | 打开高级定时器总闸 |
+| 普通定时器需要？ | ✅ | ❌ |
+| 高级定时器需要？ | ✅ | ✅ |
 
-本课只输出 TIM1_CH1，不做互补输出，所以 HAL 版 `DeadTime = 0`。
+可以理解为：`CC1E` 是"通道门"，`MOE` 是"总闸"。两道门都开，信号才能到达 PA8。
 
-### 6.14 `Break` 是什么
+### 6.8 `DeadTime` 是什么
 
-`Break` 是刹车输入。
+死区时间。半桥驱动中，上管和下管不能同时导通，否则会短路。死区时间用于在互补输出切换时插入一小段双方都关断的时间。
 
-它属于高级定时器故障保护层。当外部故障信号触发时，高级定时器可以快速关闭输出，保护电机或功率器件。
+本课只输出 TIM1_CH1，不做互补输出，所以 `DeadTime = 0`。
 
-本课 HAL 版 `BreakState = TIM_BREAK_DISABLE`，表示不使用刹车输入。
+### 6.9 `Break` 是什么
 
-### 6.15 `RepetitionCounter` 是什么
+刹车输入。当外部故障信号触发时，高级定时器可以快速关闭输出，保护电机或功率器件。
 
-`RepetitionCounter` 是重复计数器。
+本课 `BreakState = TIM_BREAK_DISABLE`，不使用刹车输入。
 
-它属于高级定时器更新控制层。它可以让更新事件不是每个周期都发生，而是隔若干周期才发生一次。
+### 6.10 `RepetitionCounter` 是什么
 
-本课 HAL 版：
+重复计数器，高级定时器特有。它可以让更新事件不是每个周期都发生，而是隔若干周期才发生一次。
 
-```c
-htim1.Init.RepetitionCounter = 0;
-```
+本课设为 0，表示每个 PWM 周期都正常更新。
 
-表示每个 PWM 周期都按普通方式更新。
+### 6.11 `AutomaticOutput` vs `MOE`
 
-### 6.16 `TIM_BreakDeadTimeConfigTypeDef` 是什么
+`AutomaticOutput` 对应 BDTR 的 `AOE`，表示刹车释放后是否自动恢复输出。`MOE` 是主输出使能本身。
 
-这是 HAL 的 Break/Dead-Time 配置结构体。
+两者不是同一个开关：`MOE` 是"现在能不能输出"，`AOE` 是"刹车结束后要不要自动把 MOE 重新打开"。
 
-它属于 HAL 高级定时器安全配置层。字段包括 `DeadTime`、`BreakState`、`BreakPolarity`、`AutomaticOutput` 等。
-
-它对应底层 BDTR。普通 TIM2/TIM3 PWM 课里没有这个结构体，因为普通定时器没有这套高级输出安全门。
-
-### 6.17 `HAL_TIMEx_ConfigBreakDeadTime()` 是什么
-
-这是 HAL 配置高级定时器 BDTR 的扩展接口。
-
-它属于 HAL TIM 扩展层。本课：
-
-```c
-HAL_TIMEx_ConfigBreakDeadTime(&htim1, &bd);
-```
-
-它把 `TIM_BreakDeadTimeConfigTypeDef` 中的死区、刹车、自动输出等参数写入 TIM1 的 BDTR。
-
-如果 TIM1 PWM 没有正确处理 BDTR/MOE，PA8 可能无输出。
+本课 `AutomaticOutput = DISABLE`，`MOE` 由 `HAL_TIM_PWM_Start()` 直接置位。
 
 ## 7. 寄存器版代码逐步讲解
 
-### 7.1 系统时钟初始化
+### 7.1 已学步骤（快速过）
 
-`system_clock_72mhz_init()` 打开 HSE，等待稳定，配置 PLL x9，把系统时钟切到 72MHz。
+以下步骤和 08_pwm_basic 完全一致，只是把 TIM2 换成 TIM1、PA0 换成 PA8：
 
-TIM1 挂在 APB2，APB2 本课不分频，所以 TIM1 时钟按 72MHz 计算。
+1. 系统时钟 72MHz，TIM1 挂 APB2 不分频，按 72MHz 算
+2. PC13 心跳推挽输出
+3. 打开 GPIOA、TIM1、AFIO 时钟
+4. PA8 配成复用推挽输出（`CRH`，`MODE8=10`，`CNF8=10`）
+5. `PSC=72-1` → 1MHz，`ARR=1000-1` → 1kHz，`CCR1=300` → 30%
+6. `OC1M=110` PWM mode 1，`OC1PE=1` 预装载
+7. `CC1E=1` 通道输出使能
 
-### 7.2 PC13 心跳初始化
-
-代码打开 GPIOC 时钟，把 PC13 配成推挽输出，并初始写高电平熄灭 LED。
-
-PC13 只说明主循环还活着。PA8 有没有 PWM，要看 TIM1 输出链路。
-
-### 7.3 打开 GPIOA、TIM1、AFIO 时钟
-
-代码分两处打开：
-
-```c
-RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_AFIOEN;
-...
-RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
-```
-
-GPIOA 管 PA8，TIM1 生成 PWM，AFIO 参与 F1 的复用功能体系。本课不做重映射，HAL 版不需要单独操作 AFIO；寄存器版显式打开它，是为了让“GPIO 复用输出”这条链路更完整。
-
-### 7.4 PA8 配成复用推挽
-
-代码：
-
-```c
-GPIOA->CRH &= ~(GPIO_CRH_MODE8 | GPIO_CRH_CNF8);
-GPIOA->CRH |= GPIO_CRH_MODE8_1 | GPIO_CRH_CNF8_1;
-```
-
-PA8 属于 CRH。`MODE8=10`，`CNF8=10`，表示复用推挽输出。TIM1_CH1 才能驱动 PA8。
-
-### 7.5 设置 PWM 频率和占空比
-
-代码：
-
-```c
-TIM1->PSC = 72U - 1U;
-TIM1->ARR = 1000U - 1U;
-TIM1->CCR1 = 300U;
-```
-
-72MHz / 72 = 1MHz。1MHz / 1000 = 1kHz。`CCR1=300` 时，占空比约 30%。
-
-### 7.6 设置 PWM mode 1 和预装载
-
-代码：
-
-```c
-TIM1->CCMR1 = TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1PE;
-```
-
-`OC1M=110`，选择 PWM mode 1。`OC1PE=1`，打开比较值预装载。
-
-### 7.7 打开通道 1 输出
-
-代码：
-
-```c
-TIM1->CCER = TIM_CCER_CC1E;
-```
-
-这打开 TIM1_CH1 通道输出。但对 TIM1 来说，这还不是最后一步。
-
-### 7.8 打开主输出使能 `MOE`
-
-代码：
+### 7.2 本课新增：打开主输出使能 `MOE`
 
 ```c
 TIM1->BDTR = TIM_BDTR_MOE;
@@ -365,9 +215,7 @@ TIM1->BDTR = TIM_BDTR_MOE;
 
 少了它，PA8 没有 PWM。
 
-### 7.9 启动计数并产生更新事件
-
-代码：
+### 7.3 启动计数并产生更新事件
 
 ```c
 TIM1->CR1 |= TIM_CR1_ARPE;
@@ -375,13 +223,9 @@ TIM1->EGR = TIM_EGR_UG;
 TIM1->CR1 |= TIM_CR1_CEN;
 ```
 
-`ARPE` 打开 ARR 预装载，`UG` 让配置装载，`CEN` 启动计数器。
+`ARPE` 打开 ARR 预装载，`UG` 让配置装载，`CEN` 启动计数器。至此 PA8 输出链路完整。
 
-至此 PA8 输出链路完整。
-
-### 7.10 主循环心跳
-
-代码：
+### 7.4 主循环心跳
 
 ```c
 while (1) {
@@ -394,94 +238,42 @@ while (1) {
 
 ## 8. HAL 版代码逐步讲解
 
-### 8.1 `HAL_Init()` 和时钟配置
+### 8.1 已学步骤（快速过）
 
-HAL 版先 `HAL_Init()`，再用 RCC 结构体配置 HSE、PLL、SYSCLK、AHB、APB1、APB2。
+1. `HAL_Init()` + 时钟配置到 72MHz
+2. PC13 配成 `GPIO_MODE_OUTPUT_PP`
+3. PA8 配成 `GPIO_MODE_AF_PP`
+4. `htim1.Init` 填 `Prescaler=72-1`、`Period=1000-1`、`RepetitionCounter=0`
+5. `HAL_TIM_PWM_Init(&htim1)`
+6. `TIM_OC_InitTypeDef` 填 `OCMode=PWM1`、`Pulse=300`、`OCPolarity=HIGH`
+7. `HAL_TIM_PWM_ConfigChannel(&htim1, &oc, TIM_CHANNEL_1)`
 
-目标和寄存器版一样：系统 72MHz，TIM1 按 72MHz 配 PWM 参数。
-
-### 8.2 HAL 配置 PC13
-
-`GPIO_InitTypeDef` 把 PC13 配成 `GPIO_MODE_OUTPUT_PP`，初始 `GPIO_PIN_SET` 熄灭 LED。
-
-PC13 是心跳，不是 TIM1 输出。
-
-### 8.3 HAL 配置 PA8
-
-代码：
+### 8.2 本课新增：`TIM_BreakDeadTimeConfigTypeDef` 配 BDTR
 
 ```c
-gpio.Pin = GPIO_PIN_8;
-gpio.Mode = GPIO_MODE_AF_PP;
-gpio.Speed = GPIO_SPEED_FREQ_HIGH;
-HAL_GPIO_Init(GPIOA, &gpio);
-```
-
-PA8 配成复用推挽输出。`GPIO_SPEED_FREQ_HIGH` 适合定时器输出引脚。
-
-### 8.4 `htim1.Init` 配 TIM1 时基
-
-代码：
-
-```c
-htim1.Instance = TIM1;
-htim1.Init.Prescaler = 72U - 1U;
-htim1.Init.Period = 1000U - 1U;
-htim1.Init.RepetitionCounter = 0;
-HAL_TIM_PWM_Init(&htim1);
-```
-
-`Prescaler` 对应 `PSC`，`Period` 对应 `ARR`，`RepetitionCounter` 是 TIM1 高级定时器特有字段。
-
-### 8.5 `TIM_OC_InitTypeDef` 配 CH1 PWM
-
-代码：
-
-```c
-oc.OCMode = TIM_OCMODE_PWM1;
-oc.Pulse = 300U;
-oc.OCPolarity = TIM_OCPOLARITY_HIGH;
-oc.OCFastMode = TIM_OCFAST_DISABLE;
-HAL_TIM_PWM_ConfigChannel(&htim1, &oc, TIM_CHANNEL_1);
-```
-
-`OCMode` 对应 `OC1M=110`，`Pulse` 对应 `CCR1=300`，`OCPolarity` 对应输出有效极性。
-
-### 8.6 `TIM_BreakDeadTimeConfigTypeDef` 配 BDTR
-
-代码里设置：
-
-```c
-bd.DeadTime = 0;
+TIM_BreakDeadTimeConfigTypeDef bd = {0};
 bd.BreakState = TIM_BREAK_DISABLE;
+bd.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+bd.DeadTime = 0U;
 bd.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-```
-
-这些字段描述 TIM1 的高级输出安全配置。`DeadTime=0` 表示不插死区，`BreakState=DISABLE` 表示不启用刹车输入，`AutomaticOutput=DISABLE` 表示本课不使用刹车释放后的自动输出恢复。它对应的是 BDTR 的 `AOE`，不要把它和主输出使能 `MOE` 混成同一个开关。
-
-### 8.7 `HAL_TIMEx_ConfigBreakDeadTime()`
-
-代码：
-
-```c
 HAL_TIMEx_ConfigBreakDeadTime(&htim1, &bd);
 ```
 
-这个函数配置 TIM1 的 BDTR。普通 TIM2/TIM3 没有这个步骤。
+这是普通 TIM2/TIM3 PWM 课里没有的步骤。结构体零初始化后，`OSSR`、`OSSI`、`LockLevel` 等字段已经是 0，只需显式设本课关心的字段。
 
-### 8.8 `HAL_TIM_PWM_Start()`
+`AutomaticOutput` 对应 BDTR 的 `AOE`（刹车释放后自动恢复输出），不要和 `MOE`（主输出使能本身）混淆。
 
-代码：
+### 8.3 本课新增：`HAL_TIM_PWM_Start()` 会设 `MOE`
 
 ```c
 HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
 ```
 
-它启动 TIM1_CH1 PWM 输出。对高级定时器，CubeF1 HAL 的 `HAL_TIM_PWM_Start()` 会打开通道输出，并在 TIM1 这类带 Break/Dead-Time 的定时器上设置 `MOE`。
+对高级定时器，CubeF1 HAL 的 `HAL_TIM_PWM_Start()` 会打开 `CC1E`，并设置 `MOE`。
 
 如果配置了 BDTR 但不 Start，PA8 仍然不会输出。
 
-### 8.9 `SysTick_Handler()` 和主循环
+### 8.4 `SysTick_Handler()` 和主循环
 
 HAL 版 `SysTick_Handler()` 调用 `HAL_IncTick()`，让 `HAL_Delay(500)` 能工作。
 
@@ -684,4 +476,4 @@ PWM 频率 = TIM1 计数频率 / (ARR + 1)
 
 下一课：[15_adc_polling](../15_adc_polling/README.md)
 
-下一课会进入 ADC。学习重点会从“定时器如何处理时间和波形”转到“模拟电压如何被采样并转换成数字值”。
+下一课会进入 ADC。学习重点会从"定时器如何处理时间和波形"转到"模拟电压如何被采样并转换成数字值"。

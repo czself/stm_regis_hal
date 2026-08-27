@@ -260,11 +260,11 @@ ISR 只做短路径，解析命令和回显放到任务。
 
 这样串口响应更及时。
 
-### 7.15 创建失败风险
+### 7.15 创建失败检查
 
-源码没有像前几课那样严格检查队列和任务创建返回值。
+源码用 `if ((g_uart_queue == NULL) || (uart_ok != pdPASS)) stop_for_debug();` 检查队列和任务创建结果。
 
-工程上应补充检查，否则 queue 为 NULL 时 ISR 投递会出问题。
+这正是工程上应有的做法，否则 queue 为 NULL 时 ISR 投递会出问题。
 
 ## 8. HAL 版代码逐步讲解
 
@@ -512,4 +512,4 @@ HAL 版重点查回调里是否重新 `HAL_UART_Receive_IT()`。
 ## 17. 下一课预告
 
 - 上一课：[58_freertos_low_power_tickless](../58_freertos_low_power_tickless/README.md)
-- 下一课：[60_freertos_dma_uart_idle](../60_freertos_dma_uart_idle/README.md)
+- 下一课：[60_freertos_adc_dma](../60_freertos_adc_dma/README.md)

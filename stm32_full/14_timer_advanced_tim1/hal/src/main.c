@@ -82,13 +82,13 @@ static void tim1_pwm_init(void)
      * 本课不启用刹车输入，也不设置死区。
      * AutomaticOutput 对应 BDTR.AOE，表示刹车释放后的自动输出策略；
      * 真正打开主输出门 MOE 的动作由后面的 HAL_TIM_PWM_Start() 完成。
+     *
+     * 结构体零初始化后，所有字段已经是 DISABLE/0，
+     * 只需显式设 BreakPolarity（HAL 要求即使 BreakState=DISABLE 也必须赋值）。
      */
-    bd.OffStateRunMode = TIM_OSSR_DISABLE;
-    bd.OffStateIDLEMode = TIM_OSSI_DISABLE;
-    bd.LockLevel = TIM_LOCKLEVEL_OFF;
-    bd.DeadTime = 0U;
     bd.BreakState = TIM_BREAK_DISABLE;
     bd.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+    bd.DeadTime = 0U;
     bd.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
 
     if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &bd) != HAL_OK) {

@@ -91,9 +91,25 @@ CAN1 初始化
 
 这节课的重点是 bxCAN 控制器结构，不是外部 CAN 物理层。真实总线还需要收发器、终端电阻和多个节点。
 
-## 6. 先认识本课里出现的核心名词
+## 6. 核心名词解释
 
-### 6.1 `CAN` 是什么
+### 6.1 已学名词速查
+
+以下名词在前面课程已完整讲解，本课只用不重复展开：
+
+| 名词 | 一句话提醒 |
+|------|-----------|
+| `system_clock_72mhz_init()` | 配置 HSE+PLL 产生 72MHz，APB1=36MHz 给 CAN1 提供位时序基准 |
+| `SysTick` | 内核定时器，本课配置为 1ms 中断，驱动 `g_ms_ticks` 和 `HAL_Delay()` |
+| `delay_ms()` | 基于 `g_ms_ticks` 的毫秒延时 |
+| `GPIOC->CRH` | GPIOC 高 8 位引脚配置寄存器，PC13 的 MODE13/CNF13 在这里 |
+| `GPIOC->BSRR` / `GPIOC->BRR` | 位设置/位复位寄存器，BSRR 拉高、BRR 拉低引脚 |
+| `GPIOA->CRH` | GPIOA 高 8 位引脚配置寄存器，PA11/PA12 在 MODE11~12/CNF11~12 位段 |
+| `RCC->APB2ENR` | APB2 外设时钟使能寄存器，GPIOA、AFIO 的时钟在这里打开 |
+| `RCC->APB1ENR` | APB1 外设时钟使能寄存器，CAN1 的时钟在这里打开 |
+| `FLASH->ACR` | Flash 访问控制寄存器，72MHz 需要等 2 个 Flash 等待周期 |
+
+### 6.2 `CAN` 是什么
 
 CAN 是 Controller Area Network，控制器局域网。
 
@@ -101,13 +117,13 @@ CAN 是 Controller Area Network，控制器局域网。
 
 如果用 UART 的点对点思维理解 CAN，就会忽略 ID、仲裁、过滤器、FIFO 这些核心概念。
 
-### 6.2 `bxCAN` 是什么
+### 6.3 `bxCAN` 是什么
 
 bxCAN 是 STM32F1 内置的 CAN 控制器模块。
 
 它属于芯片外设层，包含发送邮箱、接收 FIFO、过滤器、位时序配置和错误管理。代码里的 `CAN1->MCR`、`CAN1->BTR`、`CAN1->sTxMailBox` 都属于这个控制器。
 
-### 6.3 `内部回环模式` 是什么
+### 6.4 `内部回环模式` 是什么
 
 内部回环模式让 CAN 控制器把发送路径内部接回接收路径。
 
@@ -115,7 +131,7 @@ bxCAN 是 STM32F1 内置的 CAN 控制器模块。
 
 如果切到普通模式却没有收发器和总线，发送可能无法正常完成。
 
-### 6.4 `标准帧 ID` 是什么
+### 6.5 `标准帧 ID` 是什么
 
 标准帧 ID 是 11 位报文标识符。本课使用 `0x123`。
 
@@ -123,7 +139,7 @@ bxCAN 是 STM32F1 内置的 CAN 控制器模块。
 
 本课只校验 ID 是否等于 `0x123`，不涉及多节点仲裁。
 
-### 6.5 `DLC` 是什么
+### 6.6 `DLC` 是什么
 
 `DLC` 是 Data Length Code，数据长度码。
 
@@ -131,7 +147,7 @@ bxCAN 是 STM32F1 内置的 CAN 控制器模块。
 
 如果 DLC 填错，接收端即使收到报文，也会认为数据长度和预期不一致。
 
-### 6.6 `发送邮箱` 是什么
+### 6.7 `发送邮箱` 是什么
 
 bxCAN 有 3 个发送邮箱，用来暂存待发送报文。
 
@@ -143,7 +159,7 @@ bxCAN 有 3 个发送邮箱，用来暂存待发送报文。
 
 本课使用邮箱 0。写好报文后设置 `TXRQ`，CAN 控制器开始发送。
 
-### 6.7 `接收 FIFO0` 是什么
+### 6.8 `接收 FIFO0` 是什么
 
 FIFO0 是 CAN 接收报文暂存队列。
 
@@ -151,7 +167,7 @@ FIFO0 是 CAN 接收报文暂存队列。
 
 如果不释放 FIFO，后续报文可能堆满并丢失。
 
-### 6.8 `过滤器` 是什么
+### 6.9 `过滤器` 是什么
 
 过滤器是 bxCAN 的硬件筛选机制。
 
@@ -159,7 +175,7 @@ CAN 总线上所有节点都可能收到很多 ID 的报文，但应用通常只
 
 本课配置全放行：过滤器 0、32 位尺度、掩码模式、掩码为 0、分配到 FIFO0。
 
-### 6.9 `初始化模式` 是什么
+### 6.10 `初始化模式` 是什么
 
 CAN 的关键配置必须在初始化模式下完成。
 
@@ -167,7 +183,7 @@ CAN 的关键配置必须在初始化模式下完成。
 
 如果没进入初始化模式就改 BTR，配置可能不生效。
 
-### 6.10 `BTR` 是什么
+### 6.11 `BTR` 是什么
 
 `BTR` 是 Bit Timing Register，位时序寄存器。
 
@@ -187,13 +203,13 @@ CAN 的关键配置必须在初始化模式下完成。
 
 `BTR.LBKM=1` 同时打开内部回环。
 
-### 6.11 `HAL_CAN_AddTxMessage()` 是什么
+### 6.12 `HAL_CAN_AddTxMessage()` 是什么
 
 HAL 发送报文 API。它把 `CAN_TxHeaderTypeDef` 和数据缓冲区写入发送邮箱，并设置发送请求。
 
 它对应寄存器版写 `TIR/TDTR/TDLR/TDHR` 和 `TXRQ`。
 
-### 6.12 `HAL_CAN_GetRxMessage()` 是什么
+### 6.13 `HAL_CAN_GetRxMessage()` 是什么
 
 HAL 接收报文 API。它从 FIFO 读取报文头和数据，并释放 FIFO 槽位。
 
@@ -203,23 +219,41 @@ HAL 接收报文 API。它从 FIFO 读取报文头和数据，并释放 FIFO 槽
 
 如果你只读取寄存器内容但不释放 FIFO，`FMP0` 不会减少，新报文最终会被丢弃。本课内部回环每秒一帧不容易压满 FIFO，但真实总线报文密集时，这个错误会很快暴露。
 
-### 6.13 `CAN 收发器` 是什么
+### 6.14 `CAN 收发器` 是什么
 
 CAN 收发器是把 STM32 的 CAN_TX/CAN_RX 逻辑电平转换为 CANH/CANL 差分物理信号的外部芯片，例如 TJA1050、SN65HVD230。
 
 本课使用内部回环，所以不需要收发器，也不需要 120 欧终端电阻。但这只验证 bxCAN 控制器内部路径，不验证真实总线物理层。切到普通模式后，没有收发器和正确终端，CAN 控制器即使配置正确也无法和外部节点通信。
 
-## 7. 寄存器版代码逐步讲解
+## 7. 寄存器版代码讲解
 
-### 7.1 系统时钟与 CAN 时钟
+### 7.1 已学步骤（快速过）
 
-系统时钟为 72MHz，APB1 为 36MHz。CAN1 挂在 APB1，所以位时序计算基于 36MHz。
+以下步骤在前 30 课已多次出现，本课用列表方式快速过：
 
-### 7.2 `can_gpio_init()`
+- `system_clock_72mhz_init()`：FLASH 等 2 周期 → 开 HSE → 等 HSE 稳定 → 配 PLL 9 倍频 → 等 PLL 稳定 → 切 SYSCLK 到 PLL。结果为 72MHz，PCLK1=36MHz。
+- `systick_init()`：SysTick LOAD=71999，使能中断和计数器。`SysTick_Handler` 每 1ms 递增 `g_ms_ticks`。
+- `delay_ms()`：基于 `g_ms_ticks` 的忙等延时。
+- `led_pc13_init()`、`led_on()`、`led_off()`、`led_toggle()`：开 GPIOC 时钟 → 配 PC13 推挽输出 → 通过 BRR/BSRR 控 LED。
+- `can_gpio_init()`：开 GPIOA、AFIO、CAN1 时钟；PA12 配复用推挽（CRH MODE12=11, CNF12=10）；PA11 配浮空输入（CNF11=01）。内部回环虽不依赖引脚，但保留此初始化便于以后切到真实总线。
 
-代码打开 GPIOA、AFIO、CAN1 时钟。PA12 配成 CAN_TX 复用推挽，PA11 配成输入。
+### 7.2 本课新增步骤概览
 
-内部回环不依赖这两个外部引脚，但这样配置和真实 CAN 使用方式一致。
+本课新增的是 bxCAN 控制器配置与收发流程：
+
+```text
+can1_enter_init_mode()
+  → CAN1->MCR.INRQ=1, 等待 MSR.INAK=1
+  → CAN1->BTR = BRP=4, TS1=13, TS2=4, LBKM=1  // 500kbps + 回环
+  → can1_filter_init_accept_all()               // 全放行
+  → can1_leave_init_mode()                      // 清 INRQ, 等 INAK=0
+  → 写发送邮箱 (TIR/TDTR/TDLR/TDHR)
+  → TXRQ 请求发送
+  → 等待 FIFO0.FMP0 > 0
+  → 读 RIR/RDTR/RDLR/RDHR
+  → RF0R.RFOM0 释放 FIFO
+  → 校验 ID/DLC/Data → 控 LED
+```
 
 ### 7.3 进入初始化模式
 
@@ -309,13 +343,21 @@ CAN1->RF0R |= CAN_RF0R_RFOM0;
 
 代码校验 ID、DLC、data[0]、data[1]。成功则 LED 翻转，失败则 LED 点亮。
 
-## 8. HAL 版代码逐步讲解
+## 8. HAL 版代码讲解
 
-### 8.1 `CAN_HandleTypeDef hcan`
+### 8.1 已学步骤（快速过）
+
+- `HAL_Init()`：初始化 HAL 基础环境，包括 HAL Tick（SysTick）。
+- `system_clock_72mhz_init()`（HAL 版）：使用 `RCC_OscInitTypeDef` + `RCC_ClkInitTypeDef` 配置 HSE+PLL，PCLK1=36MHz。
+- `led_pc13_init()`（HAL 版）：`GPIO_InitTypeDef` 配 PC13 推挽输出，对应寄存器版 CRH/MODE13/CNF13。
+- `can_gpio_init()`（HAL 版）：PA12 配 `GPIO_MODE_AF_PP`（复用推挽），PA11 配 `GPIO_MODE_INPUT`。
+- `SysTick_Handler()`：调用 `HAL_IncTick()`，为 `HAL_Delay()` 提供时间基准。
+
+### 8.2 `CAN_HandleTypeDef hcan`
 
 `hcan.Instance = CAN1` 绑定 CAN1。`hcan.Init` 字段描述位时序、模式和自动功能。
 
-### 8.2 `Prescaler / TimeSeg1 / TimeSeg2`
+### 8.3 `Prescaler / TimeSeg1 / TimeSeg2`
 
 HAL 字段：
 
@@ -326,15 +368,15 @@ HAL 字段：
 
 对应寄存器版 BTR，得到 500kbps。
 
-### 8.3 `Mode = CAN_MODE_LOOPBACK`
+### 8.4 `Mode = CAN_MODE_LOOPBACK`
 
 该字段对应 `BTR.LBKM=1`。它启用内部回环，不需要外部收发器。
 
-### 8.4 `HAL_CAN_Init()`
+### 8.5 `HAL_CAN_Init()`
 
 该函数进入初始化模式，写 MCR/BTR 等寄存器，再按 HAL 状态机完成初始化。
 
-### 8.5 `CAN_FilterTypeDef`
+### 8.6 `CAN_FilterTypeDef`
 
 过滤器字段对应寄存器版过滤器配置：
 
@@ -345,11 +387,11 @@ HAL 字段：
 - `FilterFIFOAssignment=FIFO0`
 - `FilterActivation=ENABLE`
 
-### 8.6 `HAL_CAN_Start()`
+### 8.7 `HAL_CAN_Start()`
 
 启动 CAN 工作，退出睡眠/初始化相关状态，让 CAN 控制器开始处理发送和接收。
 
-### 8.7 `CAN_TxHeaderTypeDef`
+### 8.8 `CAN_TxHeaderTypeDef`
 
 发送头字段对应邮箱寄存器：
 
@@ -358,15 +400,15 @@ HAL 字段：
 - `RTR` -> 数据帧/远程帧
 - `DLC` -> TDTR 的 DLC
 
-### 8.8 `HAL_CAN_AddTxMessage()`
+### 8.9 `HAL_CAN_AddTxMessage()`
 
 把发送头和数据写入一个空邮箱，并返回使用的邮箱编号。对应寄存器版写邮箱并置 `TXRQ`。
 
-### 8.9 `HAL_CAN_GetRxFifoFillLevel()`
+### 8.10 `HAL_CAN_GetRxFifoFillLevel()`
 
 查询 FIFO0 是否有报文。对应读取 `RF0R.FMP0`。
 
-### 8.10 `HAL_CAN_GetRxMessage()`
+### 8.11 `HAL_CAN_GetRxMessage()`
 
 从 FIFO0 取出报文头和数据，并释放 FIFO。对应读取接收邮箱寄存器并写 `RFOM0`。
 

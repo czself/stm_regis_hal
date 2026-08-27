@@ -99,9 +99,22 @@ system_clock_72mhz_init()
 2. `TICKINT` 必须打开。否则 SysTick 可以计数，但不会进入 `SysTick_Handler()`。
 3. `g_ms_ticks` 必须真的持续增长。否则 `delay_ms()` 和 HAL 的 `HAL_Delay()` 都会等不到时间变化。
 
-## 6. 先认识本课里出现的核心名词
+## 6. 核心名词解释
 
-### 6.1 `SysTick` 是什么
+### 6.1 已学名词速查
+
+以下名词在前 4 课已完整讲解，本课只用不重复展开：
+
+| 名词 | 一句话提醒 |
+|------|-----------|
+| `HCLK=72MHz` | 系统时钟，SysTick 用 HCLK 作为计数时钟源 |
+| `system_clock_72mhz_init()` | 配置 HSE+PLL 产生 72MHz，此函数必须先于 SysTick 配置调用 |
+| `RCC->APB2ENR` | APB2 外设时钟使能寄存器，PC13 的 GPIOC 时钟在这里打开 |
+| `GPIOC->CRH` | GPIOC 高 8 位引脚配置寄存器，PC13 在 MODE13/CNF13 位段中配置 |
+| `GPIOC->BRR/BSRR` | 位复位/位设置寄存器，BRR 写 BR13 拉低 PC13（LED 亮），BSRR 写 BS13 拉高（LED 灭） |
+| `PC13 LED` | BluePill 板载 LED，低电平点亮（PC13=0→亮，PC13=1→灭） |
+
+### 6.2 `SysTick` 是什么
 
 `SysTick` 全称可以理解为：
 
@@ -124,7 +137,7 @@ system_clock_72mhz_init()
 
 如果 SysTick 没启动，现象通常是：程序卡在 `delay_ms()`，PC13 不再继续闪烁。
 
-### 6.2 `SysTick->LOAD` 是什么
+### 6.3 `SysTick->LOAD` 是什么
 
 `LOAD` 全称可以理解为：
 
@@ -156,7 +169,7 @@ SysTick 计数个数 = LOAD + 1
 
 如果 `LOAD` 写太小，SysTick 中断来得太快，LED 闪烁变快。写太大，中断来得太慢，LED 闪烁变慢。若系统时钟不是 72MHz 但仍写 72000 - 1，毫秒节拍会整体不准。
 
-### 6.3 `SysTick->VAL` 是什么
+### 6.4 `SysTick->VAL` 是什么
 
 `VAL` 全称可以理解为：
 
@@ -178,7 +191,7 @@ SysTick->VAL = 0U;
 
 如果不清 `VAL`，第一次中断可能不是完整的 1ms。后续周期通常会正常，但第一次延时可能出现轻微异常。
 
-### 6.4 `SysTick->CTRL` 是什么
+### 6.5 `SysTick->CTRL` 是什么
 
 `CTRL` 全称可以理解为：
 
@@ -202,7 +215,7 @@ SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk |
 
 如果 `CTRL` 没写，`LOAD` 再正确也不会产生毫秒节拍。
 
-### 6.5 `SysTick_CTRL_CLKSOURCE_Msk` 是什么
+### 6.6 `SysTick_CTRL_CLKSOURCE_Msk` 是什么
 
 `CLKSOURCE` 可以理解为：
 
@@ -218,7 +231,7 @@ SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk |
 
 如果时钟源选择错，`LOAD` 的计算基准就错了，现象就是 LED 闪烁周期不符合 500ms 预期。
 
-### 6.6 `SysTick_CTRL_TICKINT_Msk` 是什么
+### 6.7 `SysTick_CTRL_TICKINT_Msk` 是什么
 
 `TICKINT` 可以理解为：
 
@@ -234,7 +247,7 @@ SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk |
 
 如果漏掉 `TICKINT`，SysTick 可能仍在计数，但不会进入 `SysTick_Handler()`。现象通常是程序卡在第一次 `delay_ms(500)`，LED 只停在某个状态。
 
-### 6.7 `SysTick_CTRL_ENABLE_Msk` 是什么
+### 6.8 `SysTick_CTRL_ENABLE_Msk` 是什么
 
 `ENABLE` 中文通常叫：
 
@@ -246,7 +259,7 @@ SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk |
 
 如果漏掉 `ENABLE`，现象和漏掉 `TICKINT` 很像：`g_ms_ticks` 不增长，`delay_ms()` 一直等。
 
-### 6.8 `SysTick_Handler()` 是什么
+### 6.9 `SysTick_Handler()` 是什么
 
 `SysTick_Handler()` 是 SysTick 的中断服务函数。
 
@@ -265,7 +278,7 @@ void SysTick_Handler(void)
 
 如果函数名写错，比如写成 `Systick_Handler`，启动文件找不到正确入口，`g_ms_ticks` 就不会增长。
 
-### 6.9 `g_ms_ticks` 是什么
+### 6.10 `g_ms_ticks` 是什么
 
 `g_ms_ticks` 是本课自己定义的软件毫秒计数变量：
 
@@ -279,7 +292,7 @@ static volatile uint32_t g_ms_ticks = 0;
 
 如果 `g_ms_ticks` 不增长，所有基于它的延时都会卡住。
 
-### 6.10 `delay_ms()` 是什么
+### 6.11 `delay_ms()` 是什么
 
 `delay_ms()` 是本课基于 `g_ms_ticks` 写出的毫秒阻塞延时函数。
 
@@ -295,7 +308,7 @@ while ((g_ms_ticks - start) < ms) {
 
 这里用无符号减法，是为了自然处理 `uint32_t` 回绕。只要单次延时远小于 2^32 ms，`g_ms_ticks - start` 在回绕后仍然能得到正确经过时间。
 
-### 6.11 `HAL_SYSTICK_Config()` 是什么
+### 6.12 `HAL_SYSTICK_Config()` 是什么
 
 `HAL_SYSTICK_Config()` 是 HAL 提供的 SysTick 配置函数。
 
@@ -311,7 +324,7 @@ HAL_SYSTICK_Config(hclk_hz / 1000U)
 
 如果传入值算错，HAL Tick、自定义 tick、`HAL_Delay()` 的时间都会不准。
 
-### 6.12 `HAL_IncTick()` 是什么
+### 6.13 `HAL_IncTick()` 是什么
 
 `HAL_IncTick()` 是 HAL 内部毫秒 tick 的递增函数。
 
@@ -326,7 +339,7 @@ HAL_IncTick();
 
 `g_ms_ticks++` 服务我们自己的 `delay_ms()`，`HAL_IncTick()` 服务 HAL 的 `HAL_Delay()`。少了前者，自定义延时卡住；少了后者，`HAL_Delay()` 卡住。
 
-### 6.13 `HAL_Delay()` 是什么
+### 6.14 `HAL_Delay()` 是什么
 
 `HAL_Delay()` 是 HAL 提供的毫秒级阻塞延时函数。
 
@@ -343,40 +356,34 @@ HAL_Delay(500U);
 
 如果 `HAL_Delay()` 卡住，优先查 `SysTick_Handler()` 里有没有调用 `HAL_IncTick()`。
 
-## 7. 寄存器版代码逐步讲解
+## 7. 寄存器版代码讲解
 
 寄存器版在 [reg/src/main.c](reg/src/main.c)。
 
-### 7.1 先看完整逻辑
+### 7.1 已学步骤（快速过）
 
-寄存器版主流程是：
+以下步骤在前 4 课已完整讲解，本课用列表方式快速过：
 
-```c
-int main(void)
-{
-    system_clock_72mhz_init();
-    led_pc13_init();
-    systick_1ms_init();
+- `system_clock_72mhz_init()`：FLASH 等 2 周期 → 开 HSE → 等 HSE 稳定 → 配 PLL 9 倍频 → 等 PLL 稳定 → 切 SYSCLK 到 PLL。结果为 72MHz。
+- `led_pc13_init()`：开 GPIOC 时钟 → 清 CRH 的 MODE13/CNF13 → 设 MODE13=01（2MHz 推挽输出）→ BSRR 写 BS13 拉高，LED 熄灭。
 
-    while (1) {
-        GPIOC->BRR = GPIO_BRR_BR13;
-        delay_ms(500U);
-        GPIOC->BSRR = GPIO_BSRR_BS13;
-        delay_ms(500U);
-    }
-}
+顺序约束：`system_clock_72mhz_init()` 必须最先调用，因为后续 SysTick 的 `LOAD` 值计算（72000-1）直接依赖 HCLK=72MHz。如果把 `systick_1ms_init()` 放在时钟配置前面，`LOAD` 可能基于错误的时钟频率。
+
+### 7.2 本课新增步骤概览
+
+本课新增的是 SysTick 1ms 节拍的产生和使用：
+
+```text
+systick_1ms_init()
+  → SysTick->LOAD = 72000 - 1    // 重装值，决定 1ms 周期
+  → SysTick->VAL = 0             // 清零当前值，避免首次周期异常
+  → SysTick->CTRL = CLKSOURCE | TICKINT | ENABLE  // 启动：选时钟、开中断、开计数
+  → 每 1ms 进入 SysTick_Handler()
+  → g_ms_ticks++
+  → delay_ms() 用 tick 差值判断时间
 ```
 
-顺序必须这样理解：
-
-1. 先把系统时钟配到 72MHz，因为 SysTick 周期计算依赖 HCLK。
-2. 再把 PC13 配成输出，因为最终现象要靠 LED 显示。
-3. 再启动 SysTick 1ms 节拍，因为 `delay_ms()` 依赖 `g_ms_ticks` 增长。
-4. 主循环先点亮 LED，等 500ms，再熄灭 LED，等 500ms。
-
-如果 `systick_1ms_init()` 放在 `system_clock_72mhz_init()` 前面，`LOAD` 的计算就不再对应当前 HCLK。
-
-### 7.2 `static volatile uint32_t g_ms_ticks = 0;` 为什么这样写
+### 7.3 `static volatile uint32_t g_ms_ticks = 0;` 为什么这样写
 
 这句定义了软件毫秒计数：
 
@@ -467,7 +474,7 @@ SysTick->VAL = 0U;
 
 如果不清 `VAL`，第一次中断可能早到或晚到。虽然后续周期通常会稳定，但第一次 `delay_ms()` 可能不够规整。
 
-### 7.7 `systick_1ms_init()` 第三步：写 `CTRL`
+###  7.7 `systick_1ms_init()` 第三步：写 `CTRL`
 
 代码是：
 

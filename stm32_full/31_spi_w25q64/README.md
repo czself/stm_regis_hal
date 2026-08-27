@@ -192,7 +192,7 @@ HAL 版用它控制 PA4 CS：
 
 ### 6.11 `HAL_SPI_TransmitReceive()` 是什么
 
-HAL 版用它实现 `spi_xfer()`，每调用一次交换 1 个字节。
+HAL 版用它实现 `spi_transfer()`，每调用一次交换 1 个字节。
 
 读 JEDEC ID 时，发送 `0x9F` 是命令阶段；发送 `0xFF` 是提供时钟并读取返回字节。
 
@@ -242,7 +242,7 @@ SPI1->CR1 = SPI_CR1_MSTR |
 
 含义是主模式、软件 NSS、内部 NSS 有效、/8 分频、使能 SPI。CPOL/CPHA 默认 0，所以 Mode 0。
 
-### 7.6 `spi1_xfer()` 等待 TXE
+### 7.6 `spi1_transfer()` 等待 TXE
 
 ```c
 while(!(SPI1->SR&SPI_SR_TXE)){}
@@ -250,7 +250,7 @@ while(!(SPI1->SR&SPI_SR_TXE)){}
 
 等发送缓冲区空，确保可以写入下一个字节。
 
-### 7.7 `spi1_xfer()` 写 8 位 DR
+### 7.7 `spi1_transfer()` 写 8 位 DR
 
 ```c
 *(__IO uint8_t *)&SPI1->DR=b;
@@ -258,7 +258,7 @@ while(!(SPI1->SR&SPI_SR_TXE)){}
 
 写入一个字节后，SPI1 输出 8 个 SCK，MOSI 发出这个字节，同时 MISO 收入一个字节。
 
-### 7.8 `spi1_xfer()` 等待 RXNE 并返回
+### 7.8 `spi1_transfer()` 等待 RXNE 并返回
 
 ```c
 while(!(SPI1->SR&SPI_SR_RXNE)){}
@@ -267,7 +267,7 @@ return (uint8_t)SPI1->DR;
 
 `RXNE` 置位说明一个字节交换完成。返回值就是这次交换从 MISO 收到的字节。
 
-### 7.9 `w25q64_read_mid()` 拉低 CS
+### 7.9 `w25q64_read_manufacturer_id()` 拉低 CS
 
 ```c
 GPIOA->BRR=GPIO_BRR_BR4;
@@ -278,7 +278,7 @@ CS 低电平开始一笔 SPI Flash 命令事务。W25Q64 会从此刻开始解�
 ### 7.10 发送 `0x9F`
 
 ```c
-spi1_xfer(0x9F);
+spi1_transfer(0x9F);
 ```
 
 这一步把 JEDEC ID 命令发给 W25Q64。此时收到的返回值通常不使用，因为从机还在接收命令。
@@ -286,9 +286,9 @@ spi1_xfer(0x9F);
 ### 7.11 发送 dummy 读回 ID
 
 ```c
-id=spi1_xfer(0xFF);
-spi1_xfer(0xFF);
-spi1_xfer(0xFF);
+id=spi1_transfer(0xFF);
+spi1_transfer(0xFF);
+spi1_transfer(0xFF);
 ```
 
 第一次 dummy 的返回值是 Manufacturer ID，后两次通常是 Memory Type 和 Capacity。当前代码只保存第一个字节。
@@ -328,7 +328,7 @@ PA5/PA7 使用 `GPIO_MODE_AF_PP`，PA6 使用 `GPIO_MODE_INPUT`。这与寄存�
 
 该函数根据句柄字段写 SPI1 的 `CR1/CR2`，并使能 SPI。它对应寄存器版 `SPI1->CR1 = ...`。
 
-### 8.5 `spi_xfer()`
+### 8.5 `spi_transfer()`
 
 ```c
 HAL_SPI_TransmitReceive(&hspi1,&b,&r,1,100);
@@ -336,11 +336,11 @@ HAL_SPI_TransmitReceive(&hspi1,&b,&r,1,100);
 
 发送 1 字节，同时接收 1 字节。返回值 `r` 就是 MISO 读回的字节。
 
-当前源码为了短小没有检查 `HAL_SPI_TransmitReceive()` 的返回值。工程上应该判断是否为 `HAL_OK`，否则 SPI 超时或状态错误时，`r` 可能只是初始值，主循环会把它误当作真实 ID。
+当前源码已经检查 `HAL_SPI_TransmitReceive()` 的返回值：不为 `HAL_OK` 时进入 `error_handler()`。否则 SPI 超时或状态错误时，`r` 可能只是初始值，主循环会把它误当作真实 ID。
 
-另外，HAL 只负责交换字节，不负责自动控制 CS。CS 拉低、保持、拉高仍然由 `w25q64_read_mid()` 自己控制。把 CS 控制放在 `spi_xfer()` 内部会破坏多字节事务，因为每交换一个字节就结束片选，Flash 就无法把 `0x9F + dummy` 当成同一条命令。
+另外，HAL 只负责交换字节，不负责自动控制 CS。CS 拉低、保持、拉高仍然由 `w25q64_read_manufacturer_id()` 自己控制。把 CS 控制放在 `spi_transfer()` 内部会破坏多字节事务，因为每交换一个字节就结束片选，Flash 就无法把 `0x9F + dummy` 当成同一条命令。
 
-### 8.6 HAL 版 `w25q64_read_mid()`
+### 8.6 HAL 版 `w25q64_read_manufacturer_id()`
 
 函数先 `HAL_GPIO_WritePin(...RESET)` 拉低 CS，再发送 `0x9F` 和三个 `0xFF`，最后 `GPIO_PIN_SET` 拉高 CS。
 
@@ -352,7 +352,7 @@ HAL_SPI_TransmitReceive(&hspi1,&b,&r,1,100);
 
 ### 8.8 HAL 返回值的边界
 
-当前 `spi_xfer()` 没检查 `HAL_SPI_TransmitReceive()` 返回值。实际工程建议检查，避免 SPI 超时后继续用旧的 `r` 判断。
+本课 `spi_transfer()` 已检查 `HAL_SPI_TransmitReceive()` 返回值，失败时进入 `error_handler()`。这正是实际工程推荐的做法，避免 SPI 超时后继续用旧的 `r` 判断。
 
 ## 9. 两个版本真正应该怎么学
 
@@ -397,7 +397,7 @@ W25Q64 的关键不只是 SPI 基础配置，还包括器件命令协议。SPI �
 
 **答**：可能 MISO 悬空、CS 没拉低、Flash 未供电，或者从机没有真正响应。
 
-### 10.7 HAL 版的 `spi_xfer()` 和寄存器版哪段对应？
+### 10.7 HAL 版的 `spi_transfer()` 和寄存器版哪段对应？
 
 **答**：对应等待 TXE、写 DR、等待 RXNE、读 DR 的一字节交换过程。
 
@@ -481,7 +481,7 @@ W25Q64 连接正确时，PC13 快速闪烁。连接错误、地址命令失败�
 1. 保存并显示完整三个字节 JEDEC ID。
 2. 降低 SPI 分频，比较读 ID 是否仍稳定。
 3. 实现读取状态寄存器 `0x05`。
-4. 在 HAL 版 `spi_xfer()` 中检查返回值，失败时点亮 LED。
+4. 在 HAL 版 `spi_transfer()` 中检查返回值，失败时点亮 LED。
 
 ## 17. 下一课预告
 

@@ -73,6 +73,11 @@ static void delay_cycles(volatile uint32_t cycles)
     }
 }
 
+/*
+ * 软件 I2C 的速度由此延时决定。120 次循环在 72MHz 下约 1.6µs。
+ * 系统时钟变化时，实际 I2C 速率也随之变化——不像硬件 I2C 有 CCR 精确分频。
+ * 参数太小 → SCL 过快，从机采样不稳定；太大 → 通信变慢，但不会出错。
+ */
 static void soft_i2c_delay(void)
 {
     delay_cycles(120U);
@@ -103,8 +108,15 @@ static void soft_i2c_gpio_init(void)
     RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
 
     /*
-     * PB6/PB7 配成开漏输出。
-     * 软件 I2C 的“输出高”不是强推高，而是释放总线，由上拉电阻拉高。
+     * PB6/PB7 配成开漏输出（MODE=11, CNF=11）。
+     *
+     * 为什么开漏？因为 I2C 总线上可能有多个设备同时拉 SDA。
+     * 开漏模式下写 1 = 释放（靠上拉电阻拉高），写 0 = 拉低。
+     * 如果错配成推挽（CNF=10），主机强推高 SDA 时从机无法拉低做 ACK，
+     * 更糟的是两个设备同时输出相反电平会短路。
+     *
+     * 先清零再设置：CRL 里还有其他引脚（如 PB0~PB5）的配置位，
+     * 不能直接覆盖——先 &~ 清除 PB6/PB7 的 4 位，再 | 写目标值。
      */
     GPIOB->CRL &= ~(GPIO_CRL_MODE6 |
                     GPIO_CRL_CNF6 |
@@ -120,11 +132,13 @@ static void soft_i2c_gpio_init(void)
     scl_release();
 }
 
+/*
+ * START：SCL 高电平时 SDA 从高→低。
+ * 如果 SDA 下降沿不是发生在 SCL 高电平期间，AT24C02 不会识别为起始条件，
+ * 后续所有地址和数据都会被忽略。
+ */
 static void i2c_start(void)
 {
-    /*
-     * START：SCL 为高时，SDA 从高变低。
-     */
     sda_release();
     scl_release();
     soft_i2c_delay();
@@ -135,11 +149,13 @@ static void i2c_start(void)
     scl_low();
 }
 
+/*
+ * STOP：SCL 高电平时 SDA 从低→高。
+ * 如果 STOP 条件未发出（如 SDA 拉高时 SCL 不是高电平），
+ * EEPROM 可能认为传输未结束，不启动内部写周期，或总线持续被占用。
+ */
 static void i2c_stop(void)
 {
-    /*
-     * STOP：SCL 为高时，SDA 从低变高。
-     */
     sda_low();
     scl_release();
     soft_i2c_delay();
@@ -148,14 +164,12 @@ static void i2c_stop(void)
     soft_i2c_delay();
 }
 
+/*
+ * 写 1 bit。顺序固定：先放 SDA 再拉高 SCL。
+ * 如果 SDA 在 SCL 拉高之后才变化，从机采样到的可能是上一位的电平。
+ */
 static void i2c_write_bit(uint8_t bit_is_one)
 {
-    /*
-     * I2C 写 bit 的顺序：
-     * 1. SCL 低时准备 SDA
-     * 2. 拉高 SCL，让从机采样这一位
-     * 3. 再拉低 SCL，准备下一位
-     */
     if (bit_is_one != 0U) {
         sda_release();
     } else {
@@ -176,8 +190,15 @@ static void i2c_write_byte(uint8_t byte)
     }
 
     /*
-     * 第 9 个时钟本应读取 ACK。
-     * 本课为了保持最小写波形，只释放 SDA 并给出 ACK 时钟，不判断从机是否拉低。
+     * 第 9 个时钟：I2C 协议规定每发完 8 位数据后，接收方必须应答。
+     * 应答方式是：接收方在 SCL 高电平期间把 SDA 拉低（ACK）或不拉低（NACK）。
+     *
+     * 本课代码只做了"主机释放 SDA + 给出第 9 个 SCL 脉冲"，
+     * 但没有在 SCL 高时读 GPIOB->IDR 检查 SDA 是否被 AT24C02 拉低。
+     * 所以这里只是"给了 ACK 的窗口"，没有"验证 ACK 的结果"。
+     *
+     * 这是本课最重要的边界：LED 翻转只说明主机发出了波形，
+     * 不说明 EEPROM 真的接收了数据。
      */
     sda_release();
     soft_i2c_delay();
@@ -186,6 +207,10 @@ static void i2c_write_byte(uint8_t byte)
     scl_low();
 }
 
+/*
+ * 主循环：反复发送 START → 0xA0 → 0x00 → 0x5A → STOP。
+ * 边界：没有 ACK 读取和读回校验，LED 翻转不证明 EEPROM 写入成功。
+ */
 int main(void)
 {
     system_clock_72mhz_init();

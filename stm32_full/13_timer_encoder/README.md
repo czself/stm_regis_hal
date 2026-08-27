@@ -48,8 +48,8 @@
 - STM32F103C8T6 BluePill
 - ST-Link 下载器
 - 增量式旋转编码器
-- PA6 接编码器 A 相
-- PA7 接编码器 B 相
+- PA6 接编码器 A 相clk
+- PA7 接编码器 B 相dt
 - PC13 板载 LED
 
 常见接法：

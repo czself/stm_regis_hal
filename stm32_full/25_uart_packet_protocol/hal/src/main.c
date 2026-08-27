@@ -3,10 +3,27 @@
 /*
  * HAL 版：USART1 数据包协议解析。
  *
- * HAL_UART_Receive() 负责阻塞接收 1 个字节；协议状态机负责判断这个字节
- * 在 0xAA CMD DATA 0x55 四字节帧里的位置。
+ * 21~24 已经学过 UART 收发、printf 重定向。本课的新重点不是"收到一个字节"，
+ * 而是把连续字节流切分成有边界、有含义的一帧数据。
  *
- * HAL 只是换了接收 API，协议边界仍然必须由我们自己维护。
+ * 本课约定 4 字节协议帧：
+ *   0xAA  CMD  DATA  0x55
+ *
+ * 为什么要自己定义协议：
+ * - UART 硬件只负责把串行波形还原成字节，不负责告诉你"这几个字节是一包"。
+ * - 协议帧用帧头帧尾给字节流加上"边界"，让接收端知道一包从哪里开始、到哪里结束。
+ *
+ * 为什么用状态机而不是固定位置读取：
+ * - 串口可能在任何时刻接入，第一个收到的字节可能是一包中间的数据。
+ * - 状态机从 WAIT_HEAD 开始丢弃非帧头字节，直到下一个 0xAA 出现才重新同步。
+ *
+ * 错误后果：
+ * - 帧头不是 0xAA：状态机卡在 WAIT_HEAD，LED 永远不会响应。
+ * - 帧尾不是 0x55：整帧丢弃，LED 不动作，但状态机回到 WAIT_HEAD 等下一包。
+ * - 波特率不匹配：收到的字节全是乱码，状态机永远等不到 0xAA。
+ *
+ * HAL_UART_Receive() 负责阻塞接收 1 个字节，封装了寄存器版的"等待 RXNE 再读 DR"。
+ * 协议状态机仍然由我们自己维护——HAL 不替你解析协议，只替你收字节。
  */
 
 typedef enum {
@@ -26,8 +43,18 @@ static void error_handler(void);
 static void handle_packet(uint8_t cmd, uint8_t data)
 {
     /*
-     * CMD=0x01：控制 PC13 LED。
-     * BluePill 板载 LED 低电平点亮，所以 data!=0 时写 RESET。
+     * 协议层 → 动作层的分界函数。
+     *
+     * 前置条件：状态机已确认收到完整一帧（AA/CMD/DATA/55 都正确）。
+     *
+     * 目的：把协议解析和业务动作分开。状态机只负责"收到什么"，本函数只负责"做什么"。
+     *       后续增加命令时只扩展这个函数，不碰状态机。
+     *
+     * CMD=0x01：控制 PC13 LED。BluePill 板载 LED 低电平点亮，
+     *           data!=0 时写 RESET（亮），data=0 时写 SET（灭）。
+     *
+     * 错误后果：cmd 不是 0x01 时函数什么都不做，LED 保持不变。
+     *           未定义命令静默忽略，不产生副作用。
      */
     if (cmd == 0x01U) {
         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, data ? GPIO_PIN_RESET : GPIO_PIN_SET);
@@ -36,6 +63,24 @@ static void handle_packet(uint8_t cmd, uint8_t data)
 
 static void packet_fsm_input(PacketState *state, uint8_t byte, uint8_t *cmd, uint8_t *data)
 {
+    /*
+     * 协议状态机：每次处理 1 个字节，根据当前状态决定这个字节的含义。
+     *
+     * 前置条件：HAL_UART_Receive() 已返回 HAL_OK，byte 是从 USART1 DR 读到的有效字节。
+     *
+     * 目的：把连续字节流变成结构化数据包。HAL 只负责收字节，本函数负责判断
+     *       每个字节在当前帧中的角色（帧头/命令/数据/帧尾）。
+     *
+     * 状态切换：
+     *   WAIT_HEAD → 收到 0xAA 时进入 WAIT_CMD，否则丢弃（抵抗噪声和半包）
+     *   WAIT_CMD  → 保存 cmd，进入 WAIT_DATA
+     *   WAIT_DATA → 保存 data，进入 WAIT_TAIL
+     *   WAIT_TAIL → 收到 0x55 时执行 handle_packet()，无论正确与否都回到 WAIT_HEAD
+     *
+     * 错误后果：
+     * - 帧尾错误：整帧丢弃，但状态机回到 WAIT_HEAD，下一包不受影响。
+     * - 如果在 WAIT_TAIL 后不回 WAIT_HEAD：状态机永久错位，之后所有帧无法正确解析。
+     */
     switch (*state) {
     case WAIT_HEAD:
         /*
@@ -88,8 +133,15 @@ int main(void)
 
     while (1) {
         /*
-         * 每次只接收 1 字节，把“串口收字节”和“协议解析”分开。
-         * HAL_MAX_DELAY 表示一直等到收到数据，适合这个最小演示。
+         * HAL_UART_Receive() 封装了寄存器版的"等待 RXNE 再读 DR"。
+         * 每次只接收 1 字节，把"串口收字节"和"协议解析"解耦。
+         *
+         * HAL_MAX_DELAY 表示一直阻塞等到收到数据，适合最小演示。
+         * 工程中不建议用 HAL_MAX_DELAY 阻塞主循环，但本课先聚焦协议逻辑。
+         *
+         * 前置条件：usart1_init() 已成功，USB-TTL 已接 PA10 且共地。
+         * 错误后果：如果 HAL_UART_Receive() 返回非 HAL_OK（如超时、错误），
+         *           本字节被丢弃，状态机不更新，LED 不响应。
          */
         if (HAL_UART_Receive(&huart1, &byte, 1U, HAL_MAX_DELAY) == HAL_OK) {
             packet_fsm_input(&state, byte, &cmd, &data);

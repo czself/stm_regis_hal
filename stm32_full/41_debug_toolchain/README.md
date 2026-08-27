@@ -62,7 +62,7 @@ PlatformIO 工程
 上板运行
   -> system_clock_72mhz_init() 配 72MHz
   -> pc13_led_init() 配 PC13 输出
-  -> app_init() 或 main() 打开 DWT 周期计数器
+  -> debug_counter_init() 打开 DWT 周期计数器
   -> while(1) 中更新调试变量
   -> 翻转 PC13
   -> 延时
@@ -219,7 +219,7 @@ PC13 属于高 8 位引脚，所以配置 `CRH`。如果误配 `CRL`，Watch 里
 
 这样做的好处是：Watch 既能直接看 `GPIOC->ODR`，也能看 `g_last_odr`。如果两者不一致，要确认断点停在赋值前还是赋值后。
 
-### 7.7 `app_init()` 打开 trace
+### 7.7 `debug_counter_init()` 打开 trace
 
 `CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk` 打开 trace，`DWT->CYCCNT = 0` 清周期计数，`DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk` 使能计数。
 
@@ -324,7 +324,7 @@ HAL 初始化基础运行环境，并配置 SysTick 作为 HAL tick 来源。HAL
 
 ### 8.7 HAL 版 DWT 初始化
 
-HAL 版没有单独 `app_init()`，而是在 `main()` 中直接写 `CoreDebug->DEMCR`、`DWT->CYCCNT` 和 `DWT->CTRL`。
+HAL 版同样用独立的 `debug_counter_init()` 写 `CoreDebug->DEMCR`、`DWT->CYCCNT` 和 `DWT->CTRL`，与寄存器版命名一致。
 
 这和寄存器版是同一组 Cortex-M 调试寄存器，和 HAL GPIO/RCC 没有直接关系。
 

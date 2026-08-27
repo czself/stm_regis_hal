@@ -70,9 +70,17 @@ int main(void)
     uart1_send_string_polling("A DMA message will be sent every 1 second.\r\n");
 
     while (1) {
+        /*
+         * 不忙时启动一轮 DMA 发送。
+         *
+         * 注意：这里不要清 g_uart_dma_done。
+         *   回调里是同时清 busy、置 done 的，两件事在同一个中断里发生。
+         *   如果在这个分支里把 done 清掉，下一轮启动会先跑到这里，
+         *   在 done 分支翻转 LED 之前就把标志抹掉，导致 LED 几乎不翻转、
+         *   1 秒节奏也失效。done 只在它自己的处理分支里清。
+         */
         if (g_uart_dma_busy == 0U) {
             g_uart_dma_busy = 1U;
-            g_uart_dma_done = 0U;
 
             if (HAL_UART_Transmit_DMA(&huart1, g_dma_message,
                                       (uint16_t)(sizeof(g_dma_message) - 1U)) != HAL_OK) {
@@ -81,6 +89,7 @@ int main(void)
             }
         }
 
+        /* 发送完成后翻转 LED，并间隔 1 秒再启动下一轮 */
         if (g_uart_dma_done != 0U) {
             g_uart_dma_done = 0U;
             led_toggle();

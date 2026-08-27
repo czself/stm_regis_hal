@@ -197,7 +197,7 @@ static void rtc_lsi_init(void)
          *   RTC 时钟 / (PRL + 1) = 40kHz / 40000 = 1Hz
          *   即每 1 秒计数器递增 1
          *
-         * PRLH = 高 8 位，PRLL = 低 8 位（共 16 位预分频）
+         * PRL 共 20 位：PRLL 是低 16 位，PRLH 是高 4 位
          * CNTH/CNTL = 计数器清零
          */
         rtc_enter_config();

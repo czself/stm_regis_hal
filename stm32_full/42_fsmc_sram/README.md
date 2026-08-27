@@ -222,7 +222,7 @@ if (g_sram_errors == 0U) pc13_toggle();
 
 ### 7.9 为什么校验只执行一次
 
-寄存器版在 `app_init()` 中完成写入和读回校验，主循环里只根据结果翻转 LED。
+寄存器版在 `main()` 里调用 `fake_sram_write_pattern()` 和 `fake_sram_verify_pattern()` 完成写入和读回校验，主循环里只根据结果翻转 LED。
 
 这样安排能把“初始化校验”和“运行反馈”分开。真实外部 SRAM 调试时也常先做一次启动自检，再决定是否进入后续应用。
 

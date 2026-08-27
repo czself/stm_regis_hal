@@ -302,7 +302,7 @@ FreeRTOS API 要单独成层理解。`xTaskCreate()`、`vTaskDelay()`、`xQueueC
 
 ### 11.2 硬件核查
 
-确认 PC13 是否可见，PA9/PA10 是否连接到 USB-TTL，PA1/PA2 是否会影响外部电路，ST-Link 下载和复位是否正常。串口课还必须确认共地、115200、8N1。
+确认 PC13 是否可见，PA1/PA2 是否会影响外部电路，ST-Link 下载和复位是否正常。
 
 ### 11.3 寄存器路线
 

@@ -15,6 +15,17 @@
  *
  * 理解寄存器版有助于理解 HAL 函数内部在做什么。
  * 理解 HAL 版有助于在实际项目中快速开发。
+ *
+ * 为什么 I2C 必须用开漏而不是推挽：
+ *   推挽输出的两个设备如果同时输出相反电平，会直接短路烧 IO。
+ *   开漏输出只能拉低不能推高，高电平由上拉电阻提供，多个设备安全共享总线。
+ *   HAL 中 GPIO_MODE_AF_OD 对应寄存器版 CNF=11 的复用开漏。
+ *
+ * 错误后果：
+ * - I2C 引脚错配成 GPIO_MODE_AF_PP（推挽）：总线电平冲突，可能损坏硬件。
+ * - 忘了外接上拉电阻：SDA/SCL 高电平无法形成，HAL_I2C_Mem_Write 返回 HAL_ERROR。
+ * - ClockSpeed 填错（如填 400000 但 EEPROM 只支持 100kHz）：通信不稳定或失败。
+ * - 写完 EEPROM 不等 10ms 立刻读：EEPROM 处于写周期中，HAL_I2C_Mem_Read 返回 HAL_ERROR。
  */
 
 #define AT24C02_ADDR_7BIT 0x50U

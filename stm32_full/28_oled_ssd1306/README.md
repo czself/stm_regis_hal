@@ -2,25 +2,46 @@
 
 ## 1. 本课到底在学什么
 
-本课表面现象是：STM32 通过 I2C1 初始化 SSD1306 OLED，并在第 0 页写入 `0x55/0xAA` 交替测试图案，屏幕上出现一条横向纹理，PC13 LED 周期翻转。
+### 1.1 表面现象
 
-真正要学的是：同样是 I2C 写字节，外部器件不同，字节含义完全不同。AT24C02 里 `0x00` 是 EEPROM 内部地址；SSD1306 里 `0x00` 可以是 control byte，表示后面跟的是命令。
+STM32 通过 I2C1 向 SSD1306 OLED 控制器发送一串命令把它初始化，然后在第 0 页写入 `0x55/0xAA` 交替图案，屏幕上出现一条横向纹理。PC13 LED 周期翻转表示程序在跑。
 
-本课链路是：
+### 1.2 这节课最核心的一个认识
+
+**同样是 I2C 写字节，AT24C02 和 SSD1306 对"收到的东西怎么解释"完全不同。**
+
+- 第 26 课的 AT24C02 是**内存模型**：你发 `0xA0 0x00 0x5A`，它把 `0x5A` 存到地址 `0x00`，就这么简单。
+- 本课的 SSD1306 是**命令/数据模型**：它收到的每个字节都要先看一个"标记"，才知道是"改变我内部配置的命令"还是"要显示在屏幕上的像素数据"。
+
+这个"标记"就是 **control byte**——它跟在 I2C 地址后面，取值只有两种：
+
+| control byte | 含义                                                     | 例子                                    |
+| ------------ | -------------------------------------------------------- | --------------------------------------- |
+| `0x00`     | 下一个字节是**命令**，比如"打开显示"、"选择第几页" | `0x00 0xAF` = "请打开显示"            |
+| `0x40`     | 下一个字节是**显示数据**，写入 GDDRAM（显存）      | `0x40 0x55` = "在当前位置画 01010101" |
+
+**I2C 只负责把字节送到 OLED 引脚上，SSD1306 根据 control byte 决定怎么处理后面的字节。**
+
+### 1.3 整条链路
 
 ```text
-PB6/PB7 I2C1
-  -> 发送 OLED 地址 0x78
-  -> 发送 control byte
-  -> control=0x00 时写命令
-  -> control=0x40 时写显存数据
-  -> 初始化显示控制器
-  -> 选择 page 和 column
-  -> 写入 128 字节图案
-  -> OLED 像素点亮
+STM32 (I2C1)                I2C 总线                 SSD1306
+  oled_cmd(0xAF)  ------ 地址0x78 + 0x00 + 0xAF ----> "收到命令0xAF，打开显示"
+  oled_data(0x55) ------ 地址0x78 + 0x40 + 0x55 ----> "收到数据0x55，写入显存"
 ```
 
-你要把 I2C 总线传输和 SSD1306 内部命令系统分开理解：I2C 负责把字节送到器件，SSD1306 决定这些字节是命令还是显示数据。
+STM32 这边做的事都是 `I2C1->DR = 某个字节`，但 SSD1306 那边做的事完全不同——**字节的语义由 control byte 决定，不是由 I2C 决定。**
+
+### 1.4 和上一课 AT24C02 对比
+
+```text
+AT24C02（第 26 课）:        SSD1306（本课）:
+  地址 + 内部地址 + 数据       地址 + control + 命令/数据
+                                |
+                          全新的概念，本课重点
+```
+
+上节课的 AT24C02 是用 I2C 写存储器，这节课的 SSD1306 是用 I2C 配控制器。存储器和控制器对 I2C 数据的解释方式完全不同。把这一点理解透，后面学任何 I2C 器件（传感器、触摸屏、音频编解码器）都能快速上手。
 
 ## 2. 本课学习目标
 
@@ -48,7 +69,7 @@ PB6/PB7 I2C1
     └── src/main.c
 ```
 
-`reg/` 直接操作 I2C1 寄存器发送 SSD1306 命令和数据。  
+`reg/` 直接操作 I2C1 寄存器发送 SSD1306 命令和数据。
 `hal/` 使用 `HAL_I2C_Master_Transmit()` 发送两字节消息。
 
 ## 4. 实验硬件
@@ -97,87 +118,99 @@ oled_init()
 
 这节课的重点不是画复杂 UI，而是第一次理解“显示屏控制器也有自己的寄存器和显存模型”。
 
-## 6. 先认识本课里出现的核心名词
+## 6. 核心名词解释
 
-### 6.1 `SSD1306` 是什么
+### 6.1 已学名词速查
+
+以下名词在第 26 课（硬件 I2C + EEPROM）和第 27 课（软件 I2C）中已完整讲解，本课只用不重复展开：
+
+| 名词                          | 一句话提醒                                                                          |
+| ----------------------------- | ----------------------------------------------------------------------------------- |
+| `I2C1`                      | STM32 内部 I2C 外设，本课用 PB6/PB7 复用开漏，100kHz 标准模式                       |
+| `PB6/PB7 复用开漏`          | I2C1 的默认 SCL/SDA 引脚，CRL 配 CNF=11（复用开漏）+MODE=11                         |
+| `0x78`                      | 常见 OLED 7 位地址 0x3C 左移一位后的 8 位地址字节                                   |
+| `START/STOP`                | START=SCL 高时 SDA 从高变低；STOP=SCL 高时 SDA 从低变高                             |
+| `ACK`                       | 每字节后第 9 个时钟接收方拉低 SDA 表示应答                                          |
+| `SB/ADDR/TXE/BTF`           | I2C1 SR1 状态标志：SB=START 已发，ADDR=地址已 ACK，TXE=发送缓冲空，BTF=字节传输完成 |
+| `CR2/CCR/TRISE`             | I2C1 配置寄存器：CR2 设 PCLK1 频率，CCR 控 SCL 频率，TRISE 控上升时间               |
+| `SWRST/PE`                  | SWRST 软件复位 I2C1，PE 启用 I2C1 外设                                              |
+| `HAL_I2C_Master_Transmit()` | HAL 封装的 I2C 主机发送 API，内部完成 START -> 地址 -> 数据 -> STOP                 |
+
+### 6.2 `SSD1306` 是什么
 
 SSD1306 是常见小尺寸 OLED 模块里的显示控制器。
 
 它属于外部器件层，不在 STM32 芯片内部。STM32 通过 I2C 把命令和数据发给它，SSD1306 再控制 OLED 面板的像素点亮。
 
-如果 OLED 模块不是 SSD1306，初始化命令可能不同，屏幕可能无显示或显示异常。
+和 AT24C02 的最大区别：SSD1306 不是"给你一个地址你往里存数据"，而是"收到 control byte 后决定下一个字节是命令还是显示数据"。这个区别决定了整个驱动架构。
 
-### 6.2 `OLED_ADDR 0x78` 是什么
+本课为什么需要它：没有 SSD1306 就没有 OLED 显示。不理解它的 control byte 机制，就搞不清"同样走 I2C，为什么有些字节是命令、有些是数据"。
 
-代码里：
-
-```c
-#define OLED_ADDR 0x78U
-```
-
-这是 SSD1306 常见 7 位地址 `0x3C` 左移一位后的 8 位地址格式：
-
-```text
-0x3C << 1 = 0x78
-```
-
-寄存器版直接把它写入 `DR` 作为地址字节；HAL 版 `HAL_I2C_Master_Transmit()` 也要求传入左移后的地址。
-
-地址错时，寄存器版会卡在等待 `ADDR`，HAL 版可能超时返回错误，屏幕不会显示。
+配错会怎样：如果买到的是 SH1106 或其他控制器，初始化命令序列不同，屏幕可能无显示或显示异常。
 
 ### 6.3 `control byte` 是什么
 
-SSD1306 I2C 通信中，地址之后的第一个数据字节常用作 control byte，用来说明后面的字节类型。
+SSD1306 I2C 通信中，地址之后的第一个数据字节是 control byte，用来说明后面的字节类型。
 
 本课用：
 
 - `0x00`：后面是命令
 - `0x40`：后面是显示数据
 
-它属于 SSD1306 协议层，不是 STM32 I2C 外设寄存器。如果命令和数据的 control byte 搞反，初始化命令会被当成像素数据，或像素数据被当成命令，屏幕表现会乱。
+它属于 SSD1306 协议层，不是 STM32 I2C 外设寄存器。
+
+本课为什么需要它：AT24C02 用"内部地址"区分写到哪里，SSD1306 用 control byte 区分"是命令还是数据"。这是两种完全不同的器件模型。不理解 control byte，就不知道 `oled_cmd()` 和 `oled_data()` 的区别为什么不是 I2C 层面的不同，而是 SSD1306 内部解释的不同。
+
+配错会怎样：如果命令和数据的 control byte 搞反，初始化命令会被当成像素数据写到显存，屏幕一片乱；或像素数据被当成命令执行，画面完全不可控。
 
 ### 6.4 `oled_cmd()` 是什么
 
-`oled_cmd(c)` 调用：
-
-```c
-oled_write(0x00U, c);
-```
+`oled_cmd(c)` 调用 `oled_write(0x00U, c)`。
 
 它表示向 SSD1306 发送一个命令字节。命令会改变控制器状态，比如显示开关、寻址模式、扫描方向、页地址和列地址。
 
 它属于 C 封装层，对应底层 I2C 事务：地址 `0x78`、control `0x00`、命令值。
 
+本课为什么需要它：没有 `oled_cmd()`，你就得每次手动拼接 control+value 两个字节，而且容易忘记 control byte 的值。
+
+配错会怎样：如果 `oled_cmd()` 里错误地传了 `0x40` 而不是 `0x00`，命令会被当成显存数据写入 GDDRAM，屏幕可能显示乱码而非正确图案。
+
 ### 6.5 `oled_data()` 是什么
 
-`oled_data(d)` 调用：
+`oled_data(d)` 调用 `oled_write(0x40U, d)`。
 
-```c
-oled_write(0x40U, d);
-```
-
-它表示向 SSD1306 显存写一个数据字节。这个字节会落到当前 page/column 指向的位置。
+它表示向 SSD1306 显存写一个数据字节。这个字节会落到当前 page/column 指向的 GDDRAM 位置。
 
 它和 `oled_cmd()` 的 I2C 发送方式一样，区别只在 control byte。
 
+本课为什么需要它：所有像素数据都通过它写入。不区分 `oled_cmd()` 和 `oled_data()`，就没办法在同一个 I2C 链路上既配控制器又写显存。
+
+配错会怎样：同 6.4，control byte 搞反会导致数据被当成命令执行。
+
 ### 6.6 `page` 是什么
 
-SSD1306 的 128x64 显存常按 page 组织。每个 page 覆盖垂直方向 8 个像素，64 像素高度共有 8 页。
+SSD1306 的 128x64 显存按 page 组织。每个 page 覆盖垂直方向 8 个像素，64 像素高度共有 8 页（page 0 到 page 7）。
 
-一个数据字节的 8 个 bit 对应当前列上的 8 个垂直像素。写 `0x55` 和 `0xAA` 会让相邻 bit 交替亮灭，所以能看到测试纹理。
+一个数据字节的 8 个 bit 对应当前列上的 8 个垂直像素。写 `0x55`（01010101）和 `0xAA`（10101010）会让相邻 bit 交替亮灭，所以能看到测试纹理。
+
+本课为什么需要它：不设 page，数据不知道写到哪里。`oled_cmd(0xB0)` 就是选择 page 0，让后续数据从第 0 页（顶部 8 像素行）开始。
+
+配错会怎样：page 设错（如 `0xB1` 而非 `0xB0`），图案会出现在屏幕偏下 8 像素的位置，而不是顶部。这在扩展练习里可以验证。
 
 ### 6.7 `column` 是什么
 
-column 是横向列地址，范围通常是 0 到 127。
+column 是横向列地址，范围 0 到 127（因为 OLED 宽度是 128 像素）。
 
 本课设置：
 
-```c
-oled_cmd(0x00);
-oled_cmd(0x10);
-```
+- `oled_cmd(0x00)` — 列地址低 4 位 = 0
+- `oled_cmd(0x10)` — 列地址高 4 位 = 0
 
-这两条分别设置列地址低 4 位和高 4 位，让后续数据从第 0 列开始写。
+组合起来 column = 0，后续数据从第 0 列开始写。
+
+本课为什么需要它：column 和 page 一起决定数据在 GDDRAM 中的写入起点。不设 column，数据可能从上次操作的位置继续写。
+
+配错会怎样：column 设错会让数据写在屏幕的偏移位置。比如 column 设成 10，图案会从第 10 列开始，屏幕左侧出现空白。
 
 ### 6.8 `GDDRAM` 是什么
 
@@ -187,9 +220,13 @@ STM32 写入的显示数据先进入 GDDRAM，SSD1306 再根据扫描方式把�
 
 它属于外部器件内部存储层。屏幕显示不只是 I2C 线有波形，还要求控制器已经初始化、地址指针正确、数据写入 GDDRAM。
 
-GDDRAM 和 STM32 的 SRAM 没有直接关系。STM32 只能通过 I2C 命令和数据间接改变它，不能像访问 `GPIOC->ODR` 那样直接读写一个内存地址。`oled_data(0x55)` 的含义是“把一个显示字节送给 SSD1306”，至于它落到 GDDRAM 哪个位置，取决于 SSD1306 当前 page/column 指针。
+GDDRAM 和 STM32 的 SRAM 没有直接关系。STM32 只能通过 I2C 命令和数据间接改变它，不能像访问 `GPIOC->ODR` 那样直接读写一个内存地址。
 
-这也是为什么显示驱动要分层：底层 I2C 只保证字节送达，中间层命令设置地址指针，上层绘图才谈画点、画线、显示字符。如果 page/column 没设对，I2C 完全正常也可能显示在错误位置。
+**这个理解很重要**：`oled_data(0x55)` 的含义是"把一个显示字节送给 SSD1306"，至于它落到 GDDRAM 哪个位置，取决于 SSD1306 当前 page/column 指针。
+
+本课为什么需要它：没有 GDDRAM 的概念，你可能会以为每次 oled_data() 直接控制了某个像素。实际上数据先写进显存，SSD1306 再扫描显存刷新屏幕。
+
+配错会怎样：如果 page/column 没设对但 I2C 完全正常，数据会被写入 GDDRAM 的错误位置，显示在屏幕上看不到的地方。你会误以为是 I2C 通信失败，其实是地址指针问题。
 
 ### 6.9 `0xAE / 0xAF` 是什么
 
@@ -198,188 +235,235 @@ GDDRAM 和 STM32 的 SRAM 没有直接关系。STM32 只能通过 I2C 命令和�
 - `0xAE`：Display OFF
 - `0xAF`：Display ON
 
-初始化序列通常先关闭显示，配置参数，再打开显示。若没有最后的 `0xAF`，屏幕可能保持黑屏。
+初始化序列通常先关闭显示，配置参数，再打开显示。
+
+本课为什么需要它：如果在配置过程中屏幕是开着的，每个命令都可能引起闪烁或显示异常。先关再配最后打开，是标准做法。
+
+配错会怎样：配置序列里没有最后的 `0xAF`，屏幕保持黑屏，但 I2C 通信完全正常。这是"OLED 黑屏但 I2C 有波形"的常见原因之一。
 
 ### 6.10 `0x20` 是什么
 
-`0x20` 是设置内存寻址模式的命令，后面跟一个参数。本课序列中 `0x20, 0x02` 表示使用页寻址模式。
+`0x20` 是设置内存寻址模式的命令，后面跟一个参数。本课用 `0x20, 0x02`，表示使用页寻址模式。
 
-页寻址模式下，需要先设置 page 和 column，再连续写数据。
+页寻址模式下，每写一个字节 column 自动 +1，写满一列后 column 回到 0、page 不变。需要手动改 page 才能换行。
 
-### 6.11 `I2C1` 是什么
+本课为什么需要它：页寻址是最简单的模式，适合本课"往第 0 页连续写 128 字节"的场景。
 
-I2C1 是 STM32 内部 I2C 外设。本课仍使用 PB6/PB7 复用开漏，100kHz 标准模式。
+配错会怎样：如果用水平寻址模式（`0x00`），column 写满后会自动换行到下一 page，写入行为不同，位置可能和你预期的不一致。
 
-它负责产生 START、发送地址、等待 ACK、发送 control byte 和 payload、产生 STOP。它不理解 SSD1306 命令含义。
-
-### 6.12 `HAL_I2C_Master_Transmit()` 是什么
-
-HAL 版用它向 OLED 发送两个字节：
-
-```c
-uint8_t buf[2] = {control, value};
-HAL_I2C_Master_Transmit(&hi2c1, OLED_ADDR, buf, 2, 100);
-```
-
-它封装一次 I2C 主机发送事务：START、地址、发送缓冲区、STOP。SSD1306 的命令/数据语义由 `buf[0]` 的 control byte 决定。
-
-### 6.13 `0x8D / 0x14` 是什么
+### 6.11 `0x8D / 0x14` 是什么
 
 初始化序列里的 `0x8D, 0x14` 是 SSD1306 电荷泵相关命令和参数。许多 0.96 寸 OLED 模块需要打开内部电荷泵，面板才有足够驱动电压显示。
 
-它属于 SSD1306 控制器配置层，不是 I2C 外设配置。若 I2C 通信正常、地址 ACK 正常、但屏幕仍黑，初始化序列中的显示开关、电荷泵、扫描方向和对比度都要检查。
+本课为什么需要它：STM32 的 3.3V 不足以直接驱动 OLED 面板发光。SSD1306 内部有电荷泵可以把电压升到 7~8V 左右，但默认是关闭的。
 
-## 7. 寄存器版代码逐步讲解
+配错会怎样：如果 `0x8D/0x14` 缺失，OLED 面板得不到驱动电压，完全黑屏。这是最常见的问题之一——I2C 通信正常、初始化命令都有、但电荷泵没开，屏幕就是不亮。## 7. 寄存器版代码逐步讲解
 
-### 7.1 时钟和 LED
+### 7.1 已学步骤（快速过）
 
-系统时钟仍是 72MHz，APB1 是 36MHz。PC13 用作运行指示，OLED 写完测试图案后主循环周期翻转 LED。
+以下步骤在第 26 课（硬件 I2C）中已完整讲解，本课不再逐条拆解：
 
-### 7.2 `i2c1_init()` 打开 GPIOB 和 I2C1
+- **系统时钟和 LED**：`system_clock_72mhz_init()` 配置 HSE+PLL → 72MHz（APB1=36MHz）。PC13 配推挽输出，主循环中周期翻转指示程序运行。
+- **I2C1 GPIO 和时钟**：`RCC->APB2ENR |= IOPBEN` 开 GPIOB 时钟，`RCC->APB1ENR |= I2C1EN` 开 I2C1 时钟。本课用 I2C1 外设（和上一课相同），不是软件 I2C。
+- **PB6/PB7 复用开漏**：`GPIOB->CRL |= MODE6|CNF6|MODE7|CNF7`，`MODE=11`（50MHz），`CNF=11`（复用开漏）。I2C1 接管这两根线，自动产生 SCL/SDA 时序。
+- **I2C1 时序配置**：`SWRST` 软件复位清除状态 → `CR2=36`（PCLK1=36MHz）→ `CCR=180`（100kHz）→ `TRISE=37` → `CR1|=PE` 打开外设。
+
+### 7.2 本课新增步骤
+
+本课真正的新内容不是 I2C1 怎么配，而是**SSD1306 的命令系统怎么用**。
+
+#### 7.2.1 `i2c1_start_addr()` —— 发送 START 和地址
 
 ```c
-RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
-RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
+I2C1->CR1 |= I2C_CR1_START;        /* 产生 START 条件 */
+while ((I2C1->SR1 & I2C_SR1_SB) == 0U) {}  /* 等 SB 置位 */
+I2C1->DR = addr;                    /* 写地址字节（如 0x78） */
+while ((I2C1->SR1 & I2C_SR1_ADDR) == 0U) {} /* 等 ADDR=收到 ACK */
+(void)I2C1->SR1;                    /* 清 ADDR：先读 SR1 */
+(void)I2C1->SR2;                    /* 再读 SR2，硬件清除 ADDR */
 ```
 
-GPIOB 让 PB6/PB7 可配置，I2C1 时钟让外设寄存器工作。
+这一步和第 26 课完全一样。`0x78` 是 OLED 地址，I2C1 发送后等待从机 ACK。如果 OLED 没接、地址错或没上电，卡在 `ADDR` 等待。
 
-### 7.3 PB6/PB7 复用开漏
+**硬件后果**：I2C 总线上实际发生的信号是：SCL 高时 SDA 从高跳低（START）→ 发送 `0x78` → 等待 AT24C02（这里是 SSD1306）拉低 SDA（ACK）。没有 ACK 时 ADDR 永不置位，程序卡死。这也是调试 OLED 的第一道关卡——看能不能过这一关。
+
+#### 7.2.2 `i2c1_write()` —— 写一个字节
 
 ```c
-GPIOB->CRL |= GPIO_CRL_MODE6 | GPIO_CRL_CNF6 |
-              GPIO_CRL_MODE7 | GPIO_CRL_CNF7;
+while ((I2C1->SR1 & I2C_SR1_TXE) == 0U) {}  /* 等 TXE=发送缓冲空 */
+I2C1->DR = byte;
 ```
 
-这把 PB6/PB7 配成 50MHz 复用开漏输出。硬件后果是 I2C1 接管这两根线，并符合 I2C 开漏电气特性。
+等待 `TXE` 置位（前一个字节已经移出 DR），再写入下一个字节。
 
-### 7.4 I2C 软件复位和时序配置
+**硬件后果**：SSD1306 收到这个字节后，根据之前收到的 control byte 决定怎么处理。是命令就改内部寄存器，是数据就写 GDDRAM。I2C1 不知道也不关心这个区别。
 
-```c
-I2C1->CR1 = I2C_CR1_SWRST;
-I2C1->CR1 = 0;
-I2C1->CR2 = 36;
-I2C1->CCR = 180;
-I2C1->TRISE = 37;
-I2C1->CR1 = I2C_CR1_PE;
-```
-
-`SWRST` 让 I2C1 回到干净状态。`CR2/CCR/TRISE` 设置 36MHz PCLK1 下的 100kHz I2C。最后 `PE` 打开外设。
-
-### 7.5 `i2c1_start_addr()`
-
-函数先设置 `START` 并等 `SB`，再写地址并等 `ADDR`，最后读 `SR1/SR2` 清除地址标志。
-
-如果 OLED 地址错或没接，通常卡在等待 `ADDR`。
-
-### 7.6 `i2c1_write()`
+#### 7.2.3 `oled_write()` —— 完整的 I2C 事务
 
 ```c
-while ((I2C1->SR1 & I2C_SR1_TXE) == 0U) {}
-I2C1->DR = b;
-```
-
-等待发送数据寄存器为空，再写入一个字节。这个字节可能是 control byte，也可能是 SSD1306 命令或显示数据。
-
-### 7.7 `oled_write()`
-
-```c
-i2c1_start_addr(OLED_ADDR);
-i2c1_write(control);
-i2c1_write(value);
+i2c1_start_addr(OLED_ADDR);  /* START + 地址 0x78 */
+i2c1_write(control);         /* control byte：0x00=命令，0x40=数据 */
+i2c1_write(value);           /* 命令值或显示数据 */
 while ((I2C1->SR1 & I2C_SR1_BTF) == 0U) {}
-I2C1->CR1 |= I2C_CR1_STOP;
+I2C1->CR1 |= I2C_CR1_STOP;   /* 产生 STOP */
 ```
 
-每次发送两个数据字节：control 和 value。等 `BTF` 表示传输完成，再发送 STOP。
+每次 I2C 事务发送两个数据字节：control 和 value。
 
-这里每写一个命令或一个数据字节，就产生一次 I2C 事务。流程简单、容易教学，但刷新效率不高。真实 OLED 驱动通常会一次发送 control byte 后连续发送多个数据字节，减少 START/STOP 开销。
+**关键理解**：`BTF` 表示"当前字节传输完成且移位寄存器也空了"。等 `BTF` 再发 STOP，确保最后一个字节确实发完了。如果提前 STOP，OLED 可能只收到 control 没收到 value。
 
-`BTF` 表示 Byte Transfer Finished，说明当前字节传输完成且数据移位完成。等待它再发 STOP，可以避免最后一个字节还没真正发完就结束事务。若过早 STOP，OLED 可能收不完整 control/value。
+**硬件后果**：总线上完整出现 `START → 0x78 → ACK → control → ACK → value → ACK → STOP` 序列。SSD1306 在 STOP 之后开始处理收到的 control+value 对。
 
-### 7.8 `oled_cmd()` 与 `oled_data()`
-
-`oled_cmd()` 使用 control `0x00`，`oled_data()` 使用 control `0x40`。这两个函数是理解 SSD1306 的分界线：同样走 I2C，语义由 control byte 改变。
-
-### 7.9 `oled_init()` 初始化序列
-
-初始化数组包含显示关闭、寻址模式、扫描方向、对比度、多路复用比、显示偏移、时钟分频、预充电、电荷泵、显示打开等命令。
-
-这些值不是 STM32 寄存器，而是写给 SSD1306 控制器的命令。
-
-### 7.10 设置 page 和 column
+#### 7.2.4 `oled_cmd()` 和 `oled_data()`
 
 ```c
-oled_cmd(0xB0);
-oled_cmd(0x00);
-oled_cmd(0x10);
+static void oled_cmd(uint8_t command) {
+    oled_write(0x00U, command);   /* control=0x00：这是命令 */
+}
+
+static void oled_data(uint8_t data) {
+    oled_write(0x40U, data);      /* control=0x40：这是显存数据 */
+}
 ```
 
-`0xB0` 选择 page 0。`0x00/0x10` 把列地址设为 0。后续 128 个数据字节就从 page 0 的第 0 列开始写。
+这两个函数是理解 SSD1306 的分界线：同样的 I2C 流程，control byte 不同，SSD1306 的解释完全不同。
 
-### 7.11 写 128 字节测试图案
+**为什么要封装成两个函数？** 如果不封装，每次调用 `oled_write()` 都要记住 control 值，写命令时用 `0x00`、写数据时用 `0x40`。封装后语义清晰，不容易搞混。
+
+**配错后果**：如果在 `oled_cmd()` 里传了 `0x40`，命令会被当成像素数据写进 GDDRAM，屏幕出现随机图案而不是正确配置。
+
+#### 7.2.5 `oled_init()` —— 初始化序列
+
+初始化数组包含 27 个命令字节，通过 `oled_cmd()` 逐个发送。以下是关键命令分组：
+
+```c
+0xAE          /* Display OFF：配置期间关显示，防闪烁 */
+0x20, 0x02    /* 设置页寻址模式 */
+0xB0          /* 设置 page = 0 */
+0xC8          /* COM 扫描方向：从上到下 */
+0x00, 0x10    /* 设置 column = 0 */
+0x40          /* 显示起始行 = 0 */
+0x81, 0x7F    /* 设置对比度 */
+0xA1          /* 左右反相：关（正常方向） */
+0xA6          /* 正常显示（非反色） */
+0xA8, 0x3F    /* 多路复用比 = 64 */
+0xD3, 0x00    /* 显示偏移 = 0 */
+0xD5, 0x80    /* 时钟分频/振荡频率 */
+0xD9, 0xF1    /* 预充电周期 */
+0xDA, 0x12    /* COM 引脚配置 */
+0xDB, 0x40    /* VCOMH 电压 */
+0x8D, 0x14    /* 电荷泵使能（非常重要！忘了这步屏不亮） */
+0xAF          /* Display ON：所有配置完成，打开显示 */
+```
+
+**本课为什么需要这些命令**：SSD1306 上电后处于默认状态，显示关闭、电荷泵关闭、寻址模式未设置。不逐个配置，OLED 面板无法正确显示。
+
+**重点理解**：这些命令不是 STM32 的寄存器配置，而是写给 SSD1306 控制器的。STM32 的 I2C1 只是运输工具，不关心内容。
+
+**配错后果**：
+
+- 没有 `0xAF`：屏幕黑屏，但 I2C 通信正常
+- 没有 `0x8D/0x14`：电荷泵不工作，屏幕黑屏，但 I2C 通信正常
+- `0x20` 的参数错：寻址模式不同，数据写入位置行为改变
+
+#### 7.2.6 设置 page 和 column
+
+```c
+oled_cmd(0xB0);    /* page 0：顶部 8 像素行 */
+oled_cmd(0x00);    /* column 低 4 位 = 0 */
+oled_cmd(0x10);    /* column 高 4 位 = 0 */
+```
+
+`0xB0` 的二进制是 `10110000`，低 4 位 `0000` 表示 page 0。`0x00` + `0x10` 组合出 column=0。
+
+**硬件后果**：SSD1306 收到这些命令后，内部地址指针指向 GDDRAM 的第 0 页第 0 列。后续 `oled_data()` 写入的数据从那里开始，每写一字节 column 自动 +1。
+
+#### 7.2.7 写 128 字节测试图案
 
 ```c
 for (uint8_t i = 0; i < 128; ++i)
     oled_data((i & 1U) ? 0xAAU : 0x55U);
 ```
 
-每一列写一个字节，奇偶列交替。`0x55` 和 `0xAA` 的 bit 交错，所以显示成规则纹理。
+每列写一个字节，奇偶列交替 `0x55` 和 `0xAA`。
 
-## 8. HAL 版代码逐步讲解
+- `0x55` = `01010101`：第 0、2、4、6 行像素亮
+- `0xAA` = `10101010`：第 1、3、5、7 行像素亮
 
-### 8.1 HAL 时钟和 GPIO
+相邻列交替亮灭，所以屏幕顶部出现一条横向纹理——这就是"测试图案"的由来。
 
-HAL 版同样配置 72MHz 时钟、PC13 输出、PB6/PB7 复用开漏。这部分对应寄存器版 RCC 和 GPIO 配置。
+**硬件后果**：128 个字节逐个通过 I2C1 写入 SSD1306 的 GDDRAM。每次写入都是完整的 I2C 事务：`START → 0x78 → 0x40 → 数据 → STOP`。SSD1306 把每个字节放到当前 page/column 指向的显存位置，然后自动 column+1。写满 128 列后，屏幕顶部 8 行像素呈现规则纹理。## 8. HAL 版代码逐步讲解
 
-### 8.2 `I2C_HandleTypeDef hi2c1`
+### 8.1 已学步骤（快速过）
 
-`hi2c1.Instance = I2C1` 绑定 I2C1，`ClockSpeed=100000` 设置 100kHz，其他字段配置 7 位地址、普通主机模式和允许时钟拉伸。
+- **HAL 基础**：`HAL_Init()` + `SysTick_Handler()` 提供 `HAL_Delay()` 时钟基准。
+- **系统时钟和 LED**：通过 `RCC_OscInitTypeDef` / `RCC_ClkInitTypeDef` 配 72MHz，`GPIO_InitTypeDef` 配 PC13 推挽输出。
+- **I2C1 引脚和初始化**：`__HAL_RCC_GPIOB_CLK_ENABLE()` + `__HAL_RCC_I2C1_CLK_ENABLE()` 开时钟。`GPIO_InitTypeDef` 配 PB6/PB7 为 `GPIO_MODE_AF_OD`（复用开漏）。`hi2c1.Init.ClockSpeed = 100000` 设 100kHz，`HAL_I2C_Init()` 底层写 CR2/CCR/TRISE/CR1。
+- **上电延时**：`HAL_Delay(50)` 等待 OLED 模块稳定后再发初始化命令。
 
-### 8.3 `HAL_I2C_Init()`
+### 8.2 本课新增步骤
 
-该函数根据 `hi2c1.Init` 写 I2C1 的 CR2、CCR、TRISE、CR1 等寄存器。它对应寄存器版 `i2c1_init()`。
-
-### 8.4 `oled_write()`
+#### 8.2.1 `oled_write()` —— HAL 封装的事务
 
 ```c
-uint8_t buf[2] = {control, value};
-HAL_I2C_Master_Transmit(&hi2c1, OLED_ADDR, buf, 2, 100);
+uint8_t frame[2] = {control, value};
+if (HAL_I2C_Master_Transmit(&hi2c1, OLED_ADDR, frame, sizeof(frame), 100U) != HAL_OK) {
+    error_handler();
+}
 ```
 
-HAL 将两个字节作为连续 payload 发送给 OLED。底层仍然是 START、地址 ACK、写两个字节、STOP。
+`HAL_I2C_Master_Transmit()` 封装了一次完整的 I2C 主机发送事务：START → 地址 0x78 → 发 frame 的两个字节 → 等待 ACK → STOP。
 
-### 8.5 `oled_cmd()` 和 `oled_data()`
+对应寄存器版的 `i2c1_start_addr()` + 两次 `i2c1_write()` + 等 BTF + STOP。
 
-HAL 版的命令/数据区分仍由 control byte 完成。`HAL_I2C_Master_Transmit()` 不知道 `0x00` 和 `0x40` 的 SSD1306 含义。
+和寄存器版的区别：
 
-### 8.6 `HAL_Delay(50)`
+- 寄存器版：每次手动等 TXE、等 BTF、设 STOP
+- HAL 版：调用一个 API 完成上述所有步骤
 
-上电后等待 OLED 模块稳定，再发送初始化命令。若上电立即配置，某些模块可能还没准备好响应。
+**共同点**：不管用哪种方式，SSD1306 收到的数据完全一样——地址 `0x78`、control byte、value byte。
 
-### 8.7 初始化数组
+#### 8.2.2 `oled_cmd()` 和 `oled_data()`
 
-HAL 版初始化数组和寄存器版一致。你可以逐个命令对照，确认两份代码写给 SSD1306 的内容相同。
+与寄存器版完全相同，只是底层从寄存器操作换成了 HAL API：
 
-### 8.8 写图案循环
+```c
+static void oled_cmd(uint8_t command) {
+    oled_write(0x00U, command);   /* 命令：control=0x00 */
+}
 
-HAL 版同样先设置 page/column，再写 128 字节 `0x55/0xAA`。显示结果应和寄存器版一致。
+static void oled_data(uint8_t data) {
+    oled_write(0x40U, data);      /* 数据：control=0x40 */
+}
+```
 
-不过 HAL 版当前 `oled_write()` 每次只发送两个字节 `{control, value}`，所以 128 列数据会调用 128 次 `HAL_I2C_Master_Transmit()`。这对测试图案没问题，但对整屏刷新会比较慢。
+**HAL 不知道 SSD1306 协议**：`HAL_I2C_Master_Transmit()` 不关心 `0x00` 和 `0x40` 的区别。它只知道把两个字节发出去。命令/数据的语义完全由你的代码通过 control byte 决定。
 
-后续做字体库时，建议把一页的 128 个数据放进缓冲区，一次发送 `0x40` 加 128 字节数据。这样 I2C 总线效率更高，也更接近真实 OLED 驱动写法。
+#### 8.2.3 初始化序列
 
-### 8.9 HAL 返回值
+初始化数组和寄存器版完全一致。`oled_init()` 逐个调用 `oled_cmd()` 发送 27 个命令字节。`HAL_Delay(50)` 在初始化前给 OLED 上电稳定时间。
 
-当前 HAL 源码没有检查 `HAL_I2C_Master_Transmit()` 返回值。教学时要知道这个 API 可能返回 `HAL_OK`、`HAL_ERROR`、`HAL_BUSY` 或 `HAL_TIMEOUT`。
+**为什么要上电延时**：OLED 模块刚上电时，内部电荷泵和控制器可能还没准备好。立即发送 I2C 命令可能导致第一个命令无 ACK 或被忽略。50ms 的延时提供了充足的稳定时间。
 
-如果 OLED 地址错、SCL/SDA 接错、没有 ACK，HAL 通常不会让屏幕显示，但如果你忽略返回值，主循环仍然会翻转 LED，看起来像“程序正常但屏不亮”。工程上应让 `oled_write()` 返回状态，或在失败时点亮错误 LED、断点查看 `hi2c1.ErrorCode`。
+#### 8.2.4 写图案
 
-### 8.10 OLED 初始化延时
+`oled_write_test_pattern()` 和寄存器版逻辑一致：设 page 0、设 column 0、循环 128 次 `oled_data(0x55/0xAA)`。
 
-HAL 版在 `i2c1_init()` 后调用 `HAL_Delay(50)`，寄存器版也用 `delay_cycles()` 等待一段时间。这段等待是给 OLED 模块上电稳定、电荷泵准备和控制器复位留时间。
+效率差异：当前每次调用 `oled_data()` 都执行一次完整的 `HAL_I2C_Master_Transmit()`——即每个数据字节独立发送：START → 地址 → control=0x40 → 数据 → STOP。这意味着 128 字节要 128 次 I2C 事务。
 
-有些 OLED 模块上电较慢，如果刚上电就发送初始化命令，可能地址阶段无 ACK，或者命令被忽略。黑屏但偶尔复位后能显示时，要把上电延时列入排查项。
+优化方向：可以把 128 个数据字节装进一个缓冲区，前面加一个 `0x40`，一次发送 129 字节。这样只有 1 次 I2C 事务，效率高得多。
+
+#### 8.2.5 返回值检查
+
+```c
+if (HAL_I2C_Master_Transmit(...) != HAL_OK) {
+    error_handler();
+}
+```
+
+HAL 版代码检查了 `HAL_I2C_Master_Transmit()` 的返回值。如果 OLED 没接、地址错、无 ACK，API 会返回 `HAL_ERROR` 或 `HAL_TIMEOUT`，`error_handler()` 会进入死循环。
+
+**和寄存器版对比**：寄存器版如果 OLED 地址无 ACK，程序卡在 `while ((SR1 & ADDR) == 0)` 的死循环里。HAL 版则通过返回值报告错误。两者都不会"静默失败"，但 HAL 版给了你处理错误的机会（比如重试、记录日志、点亮错误灯）。寄存器版一旦卡住就只能靠看门狗或复位恢复。
 
 ## 9. 两个版本真正应该怎么学
 

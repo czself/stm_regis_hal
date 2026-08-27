@@ -4,7 +4,7 @@
 
 本课表面现象是：PC13 大约每 1000ms 翻转一次，PA1 会按 worker 获取计数信号量后的节奏翻转。PC13 来自二值信号量的“给一次、取一次”，PA1 来自计数信号量的“拿一个资源、用 300ms、再还回去”。
 
-真正要学的是 FreeRTOS 信号量的两种用途。二值信号量更像事件通知，关心“有没有事件”；计数信号量更像资源计数，关心“还有几个资源可用”。本课同时创建 `g_bin` 和 `g_count`，让你把两种语义放在同一个工程里对比。
+真正要学的是 FreeRTOS 信号量的两种用途。二值信号量更像事件通知，关心“有没有事件”；计数信号量更像资源计数，关心“还有几个资源可用”。本课同时创建 `g_binary_sem` 和 `g_counting_sem`，让你把两种语义放在同一个工程里对比。
 
 这节课接在队列之后。队列传递数据，信号量通常传递“许可”或“事件状态”。后面的互斥量、事件组、任务通知都会继续围绕“任务如何等待某个条件”展开。
 
@@ -13,7 +13,7 @@
 学完本课你应该能做到：
 
 - 能解释 PC13 为什么由 `giver` 每 1000ms 给出的二值信号量驱动。
-- 能解释 PA1 为什么由 `worker` 获取 `g_count` 后翻转。
+- 能解释 PA1 为什么由 `worker` 获取 `g_counting_sem` 后翻转。
 - 能说出 `xSemaphoreCreateBinary()` 创建出来初始是否已经可取。
 - 能说出 `xSemaphoreCreateCounting(2, 2)` 的最大计数和初始计数。
 - 能区分 `xSemaphoreGive()` 和 `xSemaphoreTake()` 的方向。
@@ -59,14 +59,14 @@
 ```text
 复位启动
   -> 配 72MHz 时钟和 GPIO
-  -> 创建二值信号量 g_bin
-  -> 创建计数信号量 g_count，最大 2，初始 2
+  -> 创建二值信号量 g_binary_sem
+  -> 创建计数信号量 g_counting_sem，最大 2，初始 2
   -> 创建 giver、taker、worker 三个任务
-  -> giver 每 1000ms 调用 xSemaphoreGive(g_bin)
-  -> taker 阻塞等待 g_bin，取到后翻转 PC13
-  -> worker 阻塞等待 g_count，取到后翻转 PA1
+  -> giver 每 1000ms 调用 xSemaphoreGive(g_binary_sem)
+  -> taker 阻塞等待 g_binary_sem，取到后翻转 PC13
+  -> worker 阻塞等待 g_counting_sem，取到后翻转 PA1
   -> worker 使用资源 300ms
-  -> worker xSemaphoreGive(g_count) 归还资源
+  -> worker xSemaphoreGive(g_counting_sem) 归还资源
 ```
 
 PC13 这条线体现“事件同步”：giver 发出一次许可，taker 消费一次许可。PA1 这条线体现“资源计数”：worker 先拿资源，工作一段时间，再归还资源。
@@ -87,7 +87,7 @@ Semaphore 是信号量，属于 FreeRTOS 内核对象层。
 
 Binary Semaphore 是二值信号量，中文叫二值信号量，属于 RTOS 同步对象层。
 
-它只有“可取”和“不可取”两种状态，适合事件通知。本课 `g_bin` 由 giver 每 1000ms give 一次，taker take 成功后翻转 PC13。
+它只有“可取”和“不可取”两种状态，适合事件通知。本课 `g_binary_sem` 由 giver 每 1000ms give 一次，taker take 成功后翻转 PC13。
 
 如果没人 give，taker 会一直阻塞；如果 give 频率高于 take，二值信号量不会无限累计。
 
@@ -103,7 +103,7 @@ Counting Semaphore 是计数信号量，属于 RTOS 资源计数层。
 
 `SemaphoreHandle_t` 是信号量句柄类型。
 
-源码中 `static SemaphoreHandle_t g_bin, g_count;` 分别保存二值和计数信号量对象。所有 give/take 都通过句柄找到对应对象。
+源码中 `static SemaphoreHandle_t g_binary_sem, g_counting_sem;` 分别保存二值和计数信号量对象。所有 give/take 都通过句柄找到对应对象。
 
 句柄为 NULL 表示创建失败，继续使用会导致异常或断言。
 
@@ -111,7 +111,7 @@ Counting Semaphore 是计数信号量，属于 RTOS 资源计数层。
 
 这是创建二值信号量的 API。
 
-本课创建后没有先 give，所以 taker 一开始会阻塞，直到 giver 第一次执行 `xSemaphoreGive(g_bin)`。这点和某些旧 API 创建后需要手动清空的历史行为要分清。
+本课创建后没有先 give，所以 taker 一开始会阻塞，直到 giver 第一次执行 `xSemaphoreGive(g_binary_sem)`。这点和某些旧 API 创建后需要手动清空的历史行为要分清。
 
 创建失败通常来自 heap 不足。
 
@@ -127,7 +127,7 @@ Counting Semaphore 是计数信号量，属于 RTOS 资源计数层。
 
 `xSemaphoreGive()` 是释放信号量或归还资源的 API。
 
-giver 对 `g_bin` give，表示事件发生；worker 对 `g_count` give，表示资源使用完归还。它们都是任务上下文 API。
+giver 对 `g_binary_sem` give，表示事件发生；worker 对 `g_counting_sem` give，表示资源使用完归还。它们都是任务上下文 API。
 
 如果对已经满的计数信号量 give，通常会失败，工程中应检查返回值。
 
@@ -143,7 +143,7 @@ taker 用它等待二值事件，worker 用它申请计数资源。第二个参�
 
 giver 是事件生产任务。
 
-它每 1000ms give 一次 `g_bin`，优先级 2。它决定 PC13 事件节奏。
+它每 1000ms give 一次 `g_binary_sem`，优先级 2。它决定 PC13 事件节奏。
 
 若 giver 没创建成功，PC13 不会按二值信号量节奏翻转。
 
@@ -151,13 +151,13 @@ giver 是事件生产任务。
 
 taker 是二值信号量消费任务。
 
-它阻塞等待 `g_bin`，成功后翻转 PC13。它不自己延时，节奏来自 giver。
+它阻塞等待 `g_binary_sem`，成功后翻转 PC13。它不自己延时，节奏来自 giver。
 
 ### 6.11 `worker` 是什么
 
 worker 是计数资源使用任务。
 
-它 take `g_count`，翻转 PA1，延时 300ms 模拟占用资源，再 give `g_count`。这条链路体现资源必须归还。
+它 take `g_counting_sem`，翻转 PA1，延时 300ms 模拟占用资源，再 give `g_counting_sem`。这条链路体现资源必须归还。
 
 ### 6.12 `portMAX_DELAY` 在信号量里是什么
 
@@ -169,13 +169,13 @@ worker 是计数资源使用任务。
 
 PC13 是二值信号量链路的现象层输出。
 
-收到一次 `g_bin`，taker 翻转一次 PC13。它证明事件通知被消费。
+收到一次 `g_binary_sem`，taker 翻转一次 PC13。它证明事件通知被消费。
 
 ### 6.14 `PA1` 在本课做什么
 
 PA1 是计数信号量链路的现象层输出。
 
-worker 成功拿到 `g_count` 后翻转 PA1，再延时 300ms 并归还资源。PA1 证明资源申请路径在运行。
+worker 成功拿到 `g_counting_sem` 后翻转 PA1，再延时 300ms 并归还资源。PA1 证明资源申请路径在运行。
 
 ### 6.15 信号量和队列有什么区别
 
@@ -209,15 +209,15 @@ PC13、PA1、PA2 被配置为输出，PA0 被配置为上拉输入。
 
 当前只使用 PC13 和 PA1。PA2/PA0 不是本课现象来源。
 
-### 7.4 创建 `g_bin`
+### 7.4 创建 `g_binary_sem`
 
-`g_bin = xSemaphoreCreateBinary();`
+`g_binary_sem = xSemaphoreCreateBinary();`
 
 这一步创建二值信号量。创建失败时返回 NULL。源码在 main 末尾统一检查。
 
-### 7.5 创建 `g_count`
+### 7.5 创建 `g_counting_sem`
 
-`g_count = xSemaphoreCreateCounting(2, 2);`
+`g_counting_sem = xSemaphoreCreateCounting(2, 2);`
 
 最大计数 2，初始计数 2。worker 第一次运行时能立即 take，不需要等待 giver。
 
@@ -229,25 +229,25 @@ giver 周期性产生二值事件；taker 消费事件；worker 演示计数资�
 
 ### 7.7 giver 的 give 和 delay
 
-giver 循环里先 `xSemaphoreGive(g_bin)`，再 `vTaskDelay(1000ms)`。
+giver 循环里先 `xSemaphoreGive(g_binary_sem)`，再 `vTaskDelay(1000ms)`。
 
 这表示每秒释放一次二值事件。若 give 失败，源码没有处理返回值，真实工程应记录。
 
 ### 7.8 taker 的 take
 
-taker 阻塞在 `xSemaphoreTake(g_bin, portMAX_DELAY)`。
+taker 阻塞在 `xSemaphoreTake(g_binary_sem, portMAX_DELAY)`。
 
 give 到来后 take 返回 `pdTRUE`，taker 翻转 PC13。然后再次等待下一次 give。
 
 ### 7.9 worker 的资源申请
 
-worker 调用 `xSemaphoreTake(g_count, portMAX_DELAY)`。
+worker 调用 `xSemaphoreTake(g_counting_sem, portMAX_DELAY)`。
 
 初始计数为 2，所以第一次 take 立即成功。成功后翻转 PA1，表示拿到资源。
 
 ### 7.10 worker 的资源占用和归还
 
-worker 延时 300ms，模拟占用资源，然后 `xSemaphoreGive(g_count)` 归还。
+worker 延时 300ms，模拟占用资源，然后 `xSemaphoreGive(g_counting_sem)` 归还。
 
 如果忘记 give，资源计数会下降，最终 worker 或其他任务可能永远等不到资源。
 
@@ -271,7 +271,7 @@ worker 延时 300ms，模拟占用资源，然后 `xSemaphoreGive(g_count)` 归�
 
 ### 7.14 计数信号量如何体现资源池
 
-`g_count` 最大计数为 2，初始计数为 2，相当于资源池里一开始有两个可用资源。
+`g_counting_sem` 最大计数为 2，初始计数为 2，相当于资源池里一开始有两个可用资源。
 
 当前只有一个 worker，所以资源竞争不明显。若增加第二、第三个 worker，它们会共同从同一个计数信号量里申请资源；最多两个任务能同时拿到资源，超过数量的任务会阻塞等待。
 
@@ -315,7 +315,7 @@ RTOS 任务等待应进入阻塞态，不能用裸机忙等思路替代。
 
 ### 8.7 HAL 版也要检查对象创建
 
-`g_bin`、`g_count` 和三个任务创建结果都要检查。
+`g_binary_sem`、`g_counting_sem` 和三个任务创建结果都要检查。
 
 HAL 不会替 FreeRTOS heap 分配失败兜底。
 
@@ -333,7 +333,7 @@ HAL 版 PC13 不闪时，先查二值信号量链路；PA1 不闪时，先查计
 
 ### 8.10 HAL 版不自动防止资源泄漏
 
-如果 worker take 成功后因为后续代码提前返回或卡住，没有执行 `xSemaphoreGive(g_count)`，HAL 也不会自动归还资源。
+如果 worker take 成功后因为后续代码提前返回或卡住，没有执行 `xSemaphoreGive(g_counting_sem)`，HAL 也不会自动归还资源。
 
 真实工程里常用统一退出路径或清理代码，确保每次成功 take 后最终都会 give。
 
@@ -341,7 +341,7 @@ HAL 版 PC13 不闪时，先查二值信号量链路；PA1 不闪时，先查计
 
 reg/hal 的差异在硬件表达，信号量语义完全相同。二值信号量看 PC13，计数信号量看 PA1。
 
-学习时先不要纠结 HAL 封装，先把 `g_bin` 和 `g_count` 的语义分清：一个表示事件到达，一个表示资源数量。再看任务如何阻塞、被唤醒、处理和再次等待。
+学习时先不要纠结 HAL 封装，先把 `g_binary_sem` 和 `g_counting_sem` 的语义分清：一个表示事件到达，一个表示资源数量。再看任务如何阻塞、被唤醒、处理和再次等待。
 
 ## 10. 检验问题清单
 
@@ -359,19 +359,19 @@ reg/hal 的差异在硬件表达，信号量语义完全相同。二值信号量
 
 ### 10.4 taker 为什么不自己延时？
 
-**答**：它阻塞等待 `g_bin`，节奏由 giver 的 give 决定。
+**答**：它阻塞等待 `g_binary_sem`，节奏由 giver 的 give 决定。
 
-### 10.5 worker 为什么要 give 回 `g_count`？
+### 10.5 worker 为什么要 give 回 `g_counting_sem`？
 
 **答**：它拿到资源后必须归还，否则计数会减少，最终资源耗尽。
 
 ### 10.6 PC13 对应哪条链路？
 
-**答**：对应二值信号量 `g_bin` 的 giver/taker 链路。
+**答**：对应二值信号量 `g_binary_sem` 的 giver/taker 链路。
 
 ### 10.7 PA1 对应哪条链路？
 
-**答**：对应计数信号量 `g_count` 的资源申请/归还链路。
+**答**：对应计数信号量 `g_counting_sem` 的资源申请/归还链路。
 
 ### 10.8 本课有没有 FromISR API？
 
@@ -397,7 +397,7 @@ reg/hal 的差异在硬件表达，信号量语义完全相同。二值信号量
 
 ### 11.3 寄存器路线
 
-配置时钟和 GPIO，创建 `g_bin`、`g_count` 和三个任务。PC13 用寄存器翻转，PA1 用寄存器翻转。
+配置时钟和 GPIO，创建 `g_binary_sem`、`g_counting_sem` 和三个任务。PC13 用寄存器翻转，PA1 用寄存器翻转。
 
 ### 11.4 HAL 路线
 
@@ -421,11 +421,11 @@ PC13 大约每 1000ms 翻转一次，因为 giver 每秒 give 一次二值信号
 
 ### 13.1 PC13 不闪
 
-查 `g_bin` 是否创建成功、giver/taker 是否创建成功、giver 是否执行 give、taker 是否阻塞在正确句柄上。
+查 `g_binary_sem` 是否创建成功、giver/taker 是否创建成功、giver 是否执行 give、taker 是否阻塞在正确句柄上。
 
 ### 13.2 PA1 不闪
 
-查 `g_count` 是否创建成功，初始计数是否为 2，worker 是否创建成功并执行 take。
+查 `g_counting_sem` 是否创建成功，初始计数是否为 2，worker 是否创建成功并执行 take。
 
 ### 13.3 程序进入 malloc failed hook
 
@@ -437,7 +437,7 @@ PC13 大约每 1000ms 翻转一次，因为 giver 每秒 give 一次二值信号
 
 ### 13.5 资源拿了不还
 
-如果删掉 `xSemaphoreGive(g_count)`，计数会逐步耗尽，后续 worker 会阻塞。真实工程中要确保每条错误路径也归还资源。
+如果删掉 `xSemaphoreGive(g_counting_sem)`，计数会逐步耗尽，后续 worker 会阻塞。真实工程中要确保每条错误路径也归还资源。
 
 ### 13.6 二值事件看起来丢失
 
@@ -453,15 +453,15 @@ PC13 大约每 1000ms 翻转一次，因为 giver 每秒 give 一次二值信号
 
 ### 13.9 PC13 正常但 PA1 异常
 
-这说明二值信号量链路可能正常，但计数信号量链路有问题。优先查 `g_count`、worker、PA1，而不是反复检查 giver/taker。
+这说明二值信号量链路可能正常，但计数信号量链路有问题。优先查 `g_counting_sem`、worker、PA1，而不是反复检查 giver/taker。
 
 ### 13.10 PA1 正常但 PC13 异常
 
-这说明计数信号量链路可能正常，但二值信号量链路有问题。优先查 `g_bin`、giver、taker、PC13。
+这说明计数信号量链路可能正常，但二值信号量链路有问题。优先查 `g_binary_sem`、giver、taker、PC13。
 
 ### 13.11 增加多个 worker 后节奏变化
 
-多个 worker 共享 `g_count` 时，计数信号量才更像资源池。若资源数是 2，第三个 worker 应该阻塞。若三个都能同时进入资源区，说明没有正确使用同一个 `g_count`。
+多个 worker 共享 `g_counting_sem` 时，计数信号量才更像资源池。若资源数是 2，第三个 worker 应该阻塞。若三个都能同时进入资源区，说明没有正确使用同一个 `g_counting_sem`。
 
 ### 13.12 give/take 返回值被忽略
 
@@ -484,12 +484,12 @@ PC13 大约每 1000ms 翻转一次，因为 giver 每秒 give 一次二值信号
 
 ## 15. 建议你现在怎么读这节课
 
-先把 `g_bin` 和 `g_count` 分开画两条线：giver -> g_bin -> taker -> PC13，worker -> g_count -> PA1 -> 延时 -> give 回去。第二遍再看创建参数，特别是计数信号量的两个 2。最后对比 reg/hal 的 GPIO 翻转方式。
+先把 `g_binary_sem` 和 `g_counting_sem` 分开画两条线：giver -> g_binary_sem -> taker -> PC13，worker -> g_counting_sem -> PA1 -> 延时 -> give 回去。第二遍再看创建参数，特别是计数信号量的两个 2。最后对比 reg/hal 的 GPIO 翻转方式。
 
 ## 16. 扩展练习
 
-1. 把 `g_count` 初始计数改成 0，观察 worker 是否阻塞。
-2. 注释掉 worker 的 `xSemaphoreGive(g_count)`，观察资源耗尽。
+1. 把 `g_counting_sem` 初始计数改成 0，观察 worker 是否阻塞。
+2. 注释掉 worker 的 `xSemaphoreGive(g_counting_sem)`，观察资源耗尽。
 3. 检查 `xSemaphoreGive()` 返回值，记录满计数时的失败。
 4. 增加第二个 worker，观察计数信号量的资源共享效果。
 5. 把 giver 周期改成 200ms，观察二值信号量事件合并风险。

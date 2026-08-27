@@ -9,9 +9,12 @@
  */
 
 static TIM_HandleTypeDef htim2;
+static UART_HandleTypeDef huart1;
 
 static void system_clock_72mhz_init(void);
 static void pc13_led_init(void);
+static void pa1_input_init(void);
+static void uart1_init(void);
 static void tim2_ch1_output_compare_init(void);
 static void error_handler(void);
 
@@ -20,14 +23,85 @@ int main(void)
     HAL_Init();
     system_clock_72mhz_init();
     pc13_led_init();
+    pa1_input_init();
+    uart1_init();
     tim2_ch1_output_compare_init();
 
     while (1) {
         /*
-         * PC13 是软件心跳；PA0 的输出比较波形由 TIM2_CH1 硬件产生。
+         * 读 PA1 电平：PA0 通过杜邦线接到 PA1，
+         * PA1 读到的就是 TIM2_CH1 输出比较产生的方波。
+         * GPIO_PIN_SET = 1 表示高电平，GPIO_PIN_RESET = 0 表示低电平。
          */
+        uint8_t level = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_SET) ? 1U : 0U;
+
+        /*
+         * FireWater 协议：每行一个数值，以 \n 结尾。
+         * VOFA+ 收到 "0\n" 或 "1\n" 后在波形窗口显示跳变。
+         */
+        uint8_t buf[2];
+        buf[0] = '0' + level;
+        buf[1] = '\n';
+        HAL_UART_Transmit(&huart1, buf, 2U, 100U);
+
         HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-        HAL_Delay(500);
+        HAL_Delay(50);
+    }
+}
+
+static void pa1_input_init(void)
+{
+    GPIO_InitTypeDef gpio = {0};
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    /*
+     * PA1 配成输入模式，用来读取 PA0 输出的方波电平。
+     * 用杜邦线把 PA0 接到 PA1，PA1 读到的就是 TIM2_CH1 的输出状态。
+     */
+    gpio.Pin = GPIO_PIN_1;
+    gpio.Mode = GPIO_MODE_INPUT;
+    gpio.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOA, &gpio);
+}
+
+static void uart1_init(void)
+{
+    GPIO_InitTypeDef gpio = {0};
+
+    __HAL_RCC_USART1_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    /*
+     * PA9 = USART1_TX，配成复用推挽输出。
+     * PA10 = USART1_RX，配成输入（本课不用接收，但引脚模式要配对）。
+     */
+    gpio.Pin = GPIO_PIN_9;
+    gpio.Mode = GPIO_MODE_AF_PP;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOA, &gpio);
+
+    gpio.Pin = GPIO_PIN_10;
+    gpio.Mode = GPIO_MODE_INPUT;
+    gpio.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOA, &gpio);
+
+    /*
+     * USART1 时钟 = 72MHz（APB2），波特率 115200。
+     * HAL 内部根据 BRR = 72MHz / 115200 = 625 自动计算。
+     */
+    huart1.Instance = USART1;
+    huart1.Init.BaudRate = 115200U;
+    huart1.Init.WordLength = UART_WORDLENGTH_8B;
+    huart1.Init.StopBits = UART_STOPBITS_1;
+    huart1.Init.Parity = UART_PARITY_NONE;
+    huart1.Init.Mode = UART_MODE_TX;
+    huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+
+    if (HAL_UART_Init(&huart1) != HAL_OK) {
+        error_handler();
     }
 }
 
