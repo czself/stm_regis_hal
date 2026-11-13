@@ -1,6 +1,6 @@
 # STM32 全栈修炼手册
 
-> 寄存器与 HAL 双轨对照，编号 00–62，从点灯到 FreeRTOS，把 STM32F103 每个外设都掰开揉碎讲清楚。
+> 寄存器与 HAL 双轨对照，编号 00–67，从点灯到 FreeRTOS、Bootloader 与多通道 OTA，把 STM32F103 每个外设都掰开揉碎讲清楚。
 
 ## 项目简介
 
@@ -92,6 +92,13 @@ pio run -d stm32_full/01_led/reg -t upload
 | 编号 | 课程 | 关键词 |
 |------|------|--------|
 | 32 | [CAN 基础](stm32_full/32_can_basic/README.md) | 波特率、标识符、收发过滤 |
+| 65 | [CAN 进阶](stm32_full/65_can_advanced/README.md) | 精确过滤器、接收中断、远程帧、Bus-Off |
+
+### LoRa 无线
+
+| 编号 | 课程 | 关键词 |
+|------|------|--------|
+| 66 | [LoRa SX1278](stm32_full/66_lora_sx1278/README.md) | SPI 寄存器、433MHz、BW/SF/CR、RSSI/SNR |
 
 ### 中断与系统
 
@@ -148,11 +155,19 @@ pio run -d stm32_full/01_led/reg -t upload
 | 61 | [小型系统项目](stm32_full/61_small_system_project/README.md) | 多外设协同、状态机 |
 | 62 | [LCD 12864 显示](stm32_full/62_lcd_12864/README.md) | 并口/串口 LCD 驱动 |
 
+### Bootloader 与 OTA
+
+| 编号 | 课程 | 关键词 |
+|------|------|--------|
+| 63 | [Bootloader 基础](stm32_full/63_bootloader_iap/README.md) | 内存分区、VTOR、MSP、跳转 |
+| 64 | [串口 OTA](stm32_full/64_uart_ota/README.md) | 升级协议、CRC16/CRC32、Python 上位机 |
+| 67 | [三通道 OTA](stm32_full/67_multichannel_ota/README.md) | UART/CAN/LoRa 统一升级、分片重组 |
+
 ## 目录结构
 
 ```
 stm32/
-├── stm32_full/                  # 主教程：63 个课程目录（编号 00–62）
+├── stm32_full/                  # 主教程：68 个课程目录（编号 00–67）
 │   ├── 00_environment_intro/    # 每课目录结构：
 │   │   ├── README.md            #   详尽讲解文档
 │   │   ├── reg/                 #   寄存器版工程
@@ -164,6 +179,11 @@ stm32/
 │   ├── 01_led/
 │   ├── ...
 │   ├── 62_lcd_12864/
+│   ├── 63_bootloader_iap/       # 63~67 为 Bootloader / OTA 系列
+│   ├── 64_uart_ota/
+│   ├── 65_can_advanced/
+│   ├── 66_lora_sx1278/
+│   ├── 67_multichannel_ota/
 │   ├── common/                  # 公共工具（VOFA+ 等）
 │   ├── freertos/                # FreeRTOS 配置文件
 │   └── lib/                     # FreeRTOS 内核源码
@@ -193,6 +213,6 @@ stm32/
 
 ## 子项目说明
 
-- **stm32_full**：主教程，63 个课程目录（编号 00–62），每课含寄存器版 + HAL 版双轨代码与详尽中文讲解
+- **stm32_full**：主教程，68 个课程目录（编号 00–67），每课含寄存器版 + HAL 版双轨代码与详尽中文讲解
 - **stm_register**：裸机编程参考指南，展示不依赖任何框架、仅用 GCC + 数据手册开发 MCU 的方法
 - **re/register**：寄存器速查笔记，聚焦 BSRR、GPIO 等高频操作寄存器的实战用法

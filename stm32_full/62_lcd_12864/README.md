@@ -446,5 +446,5 @@ PC 端也应等待 ACK 后再发送下一帧。
 ## 17. 下一课预告
 
 - 上一课：[61_small_system_project](../61_small_system_project/README.md)
-- 下一课：本系列到这里完成 62 章基础链路
+- 下一课：[63_bootloader_iap](../63_bootloader_iap/README.md)：从显示与外设转入 Bootloader 分区、跳转与 OTA 升级。
 
