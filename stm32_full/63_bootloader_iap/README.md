@@ -41,12 +41,14 @@
 ├── README.md
 ├── reg/
 │   ├── platformio.ini      # env:bootloader / env:app
+│   ├── ld/bootloader.ld    # Bootloader 链接脚本（32KB 上限）
 │   ├── ld/app.ld           # app 专用链接脚本（FLASH 起始 0x08008000）
 │   └── src/
 │       ├── bootloader.c
 │       └── app.c
 └── hal/
     ├── platformio.ini
+    ├── ld/bootloader.ld
     ├── ld/app.ld
     └── src/
         ├── bootloader.c

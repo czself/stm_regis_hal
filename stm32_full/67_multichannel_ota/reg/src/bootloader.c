@@ -586,7 +586,8 @@ static void can_send_bytes(const uint8_t *data, uint16_t length)
 
     while (offset < length) {
         uint8_t frame[8];
-        uint8_t count = (uint8_t)((length - offset) > 7U ? 7U : (length - offset));
+        uint16_t remain = (uint16_t)(length - offset);
+        uint8_t count = (remain > 7U) ? 7U : (uint8_t)remain;
         uint8_t i;
 
         frame[0] = g_can_tx_seq++;

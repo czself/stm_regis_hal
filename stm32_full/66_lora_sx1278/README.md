@@ -2,7 +2,7 @@
 
 ## 1. 本课到底在学什么
 
-本课表面现象是：串口打印 SX1278 版本号，随后每 2 秒发一包 `PING nnn`，再进入接收等待 5 秒；如果收到另一块板发来的 `PING`，自动回一包 `PONG` 并打印 RSSI/SNR。
+本课表面现象是：串口打印 SX1278 版本号，每轮先发一包 `PING nnn`，再进入最长 5 秒的接收等待，最后延时 2 秒；如果收到另一块板发来的 `PING`，自动回一包 `PONG` 并打印 RSSI/SNR。
 
 真正要学的是：**如何用 SPI 配置一个射频芯片，并让数据真正发到空中**。链路是：
 
@@ -323,6 +323,8 @@ hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
 
 APB2 72MHz / 8 = 9MHz，低于 SX1278 的 10MHz 上限。用 `/2`（36MHz）会读到不稳定数据。
 
+`HAL_SPI_Init()` 的 `CLKPolarity=LOW`、`CLKPhase=1EDGE` 对应 `SPI1->CR1.CPOL=0/CPHA=0`；`NSS=SPI_NSS_SOFT` 对应 `SSM=1`；`BaudRatePrescaler=8` 对应 `BR[2:0]=010`。
+
 ## 9. 两个版本真正应该怎么学
 
 寄存器版重点看：
@@ -424,7 +426,7 @@ LoRa 项目最重要的是参数规划：频率、SF、BW、同步字一旦确�
 [LORA] tx done
 ```
 
-之后每 2 秒重复一次；接收等待 5 秒超时，不打印 rx。
+单板时每轮约 7 秒（发送 + 5 秒接收超时 + 2 秒延时）；有对端时收到回包后约 2 秒一轮。
 
 双板（都烧本课固件，天线接好）：
 

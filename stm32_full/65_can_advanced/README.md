@@ -264,6 +264,8 @@ can1_leave_init_mode();
 - `HAL_CAN_Init`、`HAL_CAN_Start`：32 课
 - `HAL_CAN_AddTxMessage`、`HAL_CAN_GetRxMessage`：32 课
 
+`HAL_CAN_Init()` 会把 `Prescaler/SyncJumpWidth/TimeSeg1/TimeSeg2` 换算后写入 `BTR.BRP/SJW/TS1/TS2`；`Mode=CAN_MODE_LOOPBACK` 对应 `BTR.LBKM=1`；`AutoBusOff` 对应 `MCR.ABOM`。
+
 ### 8.2 新增步骤：两个过滤器
 
 ```c
@@ -421,7 +423,7 @@ fifo0=30 fifo1=10 rtr=10 other=0 tec=0 rec=0 busoff=0
 fifo0=60 fifo1=20 rtr=20 other=0 tec=0 rec=0 busoff=0
 ```
 
-每 10 轮 PC13 翻转一次（约 10 秒一次）。`other` 必须一直是 0；如果大于 0，说明过滤器漏放了其他 ID。
+每 10 轮 PC13 翻转一次（每轮约 520ms，约 5 秒一次）。`other` 必须一直是 0；如果大于 0，说明过滤器漏放了其他 ID。
 
 异常表现：
 

@@ -65,11 +65,8 @@ void USB_LP_CAN1_RX0_IRQHandler(void)
 {
     while ((CAN1->RF0R & CAN_RF0R_FMP0_Msk) != 0U) {
         uint32_t rir = CAN1->sFIFOMailBox[0].RIR;
-        uint32_t rdtr = CAN1->sFIFOMailBox[0].RDTR;
         uint16_t std_id = (uint16_t)(rir >> 21);
         uint8_t is_remote = ((rir & CAN_RI0R_RTR) != 0U) ? 1U : 0U;
-
-        (void)rdtr;
 
         if (std_id == CAN_STD_ID_DATA1) {
             g_fifo0_count++;

@@ -42,6 +42,7 @@ PC 读取 app.bin
 ├── README.md
 ├── reg/
 │   ├── platformio.ini          # env:bootloader / env:app
+│   ├── ld/bootloader.ld
 │   ├── ld/app.ld
 │   ├── src/
 │   │   ├── bootloader.c        # OTA 协议 + Flash 写入
@@ -50,6 +51,7 @@ PC 读取 app.bin
 │       └── ota_upload.py       # PC 上位机
 └── hal/
     ├── platformio.ini
+    ├── ld/bootloader.ld
     ├── ld/app.ld
     ├── src/
     │   ├── bootloader.c

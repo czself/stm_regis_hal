@@ -54,6 +54,7 @@ OTA 协议（帧格式、CRC16、CRC32、序号、ACK）完全复用 64 课；�
 ├── README.md
 ├── reg/
 │   ├── platformio.ini
+│   ├── ld/bootloader.ld
 │   ├── ld/app.ld
 │   ├── src/
 │   │   ├── bootloader.c      # 三通道 + OTA 协议 + Flash
@@ -62,6 +63,7 @@ OTA 协议（帧格式、CRC16、CRC32、序号、ACK）完全复用 64 课；�
 │       └── ota_upload.py     # UART 上位机（chunk 32）
 └── hal/
     ├── platformio.ini
+    ├── ld/bootloader.ld
     ├── ld/app.ld
     ├── src/
     │   ├── bootloader.c
@@ -286,6 +288,17 @@ static void channel_send_bytes(const uint8_t *data, uint16_t len)
 
 - HAL UART/GPIO/SPI/CAN/Flash：前几课
 - OTA 协议与 Flash 校验：64 课
+
+本课用到的 HAL API 与寄存器对应关系：
+
+| HAL API | 底层寄存器动作 |
+|---------|---------------|
+| `HAL_UART_Init/Transmit/Receive` | 写 `BRR/CR1`，轮询 `SR.TXE/RXNE` 后读写 `DR` |
+| `HAL_CAN_Init` | 写 `MCR`、`BTR`（含 `LBKM`/`ABOM`） |
+| `HAL_CAN_AddTxMessage` | 写 `TIR/TDTR/TDLR/TDHR` 并置 `TXRQ` |
+| `HAL_CAN_GetRxMessage` | 读 `RIR/RDTR/RDLR/RDHR`，写 `RFOM0` |
+| `HAL_SPI_Init/TransmitReceive` | 写 `CR1`（CPOL/CPHA/BR/SSM），轮询 `SR` 后读写 `DR` |
+| `HAL_FLASHEx_Erase/Program` | 写 `PER/AR/STRT`、`PG`，半字编程 |
 
 ### 8.2 新增步骤：CAN 轮询
 

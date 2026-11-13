@@ -222,6 +222,14 @@ static void can1_recover_busoff(void)
      */
     (void)HAL_CAN_Stop(&hcan);
     (void)HAL_CAN_Start(&hcan);
+
+    /*
+     * Stop/Start 之后中断使能可能被清掉，必须重新打开，
+     * 否则总线恢复了但再也收不到 FIFO 中断。
+     */
+    (void)HAL_CAN_ActivateNotification(&hcan,
+        CAN_IT_RX_FIFO0_MSG_PENDING |
+        CAN_IT_RX_FIFO1_MSG_PENDING);
 }
 
 static void can_report_counts(void)
